@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name: GS1 GTIN Manager
- * Plugin URI: https://github.com/yourusername/gs1-gtin-manager
+ * Plugin URI: https://github.com/yourcodingNL/gs1-gtin-manager
  * Description: Beheer GS1 GTIN codes voor WooCommerce producten via de GS1 Nederland API
  * Version: 1.0.0
  * Author: YoCo - Sebastiaan Kalkman
@@ -14,7 +14,7 @@
  * WC tested up to: 9.0
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
- * GitHub Plugin URI: yourusername/gs1-gtin-manager
+ * GitHub Plugin URI: yourcodingNL/gs1-gtin-manager
  * Primary Branch: main
  */
 
@@ -31,7 +31,7 @@ define('GS1_GTIN_PLUGIN_BASENAME', plugin_basename(__FILE__));
 // GitHub Update Checker
 require_once GS1_GTIN_PLUGIN_DIR . 'includes/class-github-updater.php';
 if (is_admin()) {
-    new GS1_GTIN_GitHub_Updater(__FILE__, 'yourusername', 'gs1-gtin-manager');
+    new GS1_GTIN_GitHub_Updater(__FILE__, 'yourcodingNL', 'gs1-gtin-manager');
 }
 
 // Check WooCommerce
