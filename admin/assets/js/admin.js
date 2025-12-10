@@ -17,6 +17,31 @@
         registrationStep: 1,
         registrationData: {},
         
+        // Calculate checkdigit for 12-digit GTIN
+        calculateCheckdigit: function(gtin12) {
+            if (!gtin12 || gtin12 === '-' || gtin12.length !== 12) {
+                return gtin12;
+            }
+            
+            gtin12 = gtin12.padStart(12, '0');
+            
+            let sum_odd = 0;
+            let sum_even = 0;
+            
+            for (let i = 0; i < 12; i++) {
+                if (i % 2 === 0) {
+                    sum_odd += parseInt(gtin12[i]);
+                } else {
+                    sum_even += parseInt(gtin12[i]);
+                }
+            }
+            
+            let total = sum_odd + (sum_even * 3);
+            let checkdigit = (10 - (total % 10)) % 10;
+            
+            return gtin12 + checkdigit;
+        },
+        
         init: function() {
             this.bindEvents();
             
@@ -24,8 +49,6 @@
             if ($('#gs1-products-table').length) {
                 this.loadProducts();
             }
-            
-            console.log('GS1Admin initialized');
         },
         
         bindEvents: function() {
@@ -35,7 +58,6 @@
             $(document).on('click', '#gs1-select-all', (e) => this.selectAll(e));
             $(document).on('change', '.gs1-product-checkbox', () => this.updateSelection());
             $(document).on('click', '#gs1-assign-selected', () => this.assignGtins());
-            $(document).on('click', '#gs1-unassign-selected', () => this.unassignGtins());
             $(document).on('click', '#gs1-register-selected', () => this.startRegistration());
             $(document).on('click', '#gs1-mark-external', () => this.markExternal());
             $(document).on('click', '#gs1-prev-page', () => this.changePage(-1));
@@ -75,62 +97,6 @@
             $(document).on('click', '#gs1-close-log', () => {
                 $('.gs1-log-viewer').hide();
             });
-            $(document).on('click', '#gs1-copy-log', () => {
-                const logText = $('#gs1-log-content-pre').text();
-                navigator.clipboard.writeText(logText).then(() => {
-                    alert('Log gekopieerd naar klembord!');
-                });
-            });
-            $(document).on('click', '#gs1-clear-log', () => {
-                if (!confirm('Weet je zeker dat je deze log wilt legen? De inhoud wordt verwijderd maar het bestand blijft bestaan.')) return;
-                
-                const filename = $('#gs1-current-log-name').text();
-                $.ajax({
-                    url: gs1GtinAdmin.ajaxUrl,
-                    type: 'POST',
-                    data: {
-                        action: 'gs1_clear_log',
-                        nonce: gs1GtinAdmin.nonce,
-                        filename: filename
-                    },
-                    success: (response) => {
-                        if (response.success) {
-                            $('#gs1-log-content-pre').text('');
-                            alert('Log geleegd!');
-                        } else {
-                            alert('Fout: ' + (response.data?.message || 'Onbekende fout'));
-                        }
-                    }
-                });
-            });
-            $(document).on('click', '.gs1-delete-log, #gs1-delete-current-log', (e) => {
-                let filename;
-                if ($(e.target).attr('id') === 'gs1-delete-current-log') {
-                    filename = $('#gs1-current-log-name').text();
-                } else {
-                    filename = $(e.target).data('filename');
-                }
-                
-                if (!confirm('Weet je zeker dat je "' + filename + '" permanent wilt verwijderen?')) return;
-                
-                $.ajax({
-                    url: gs1GtinAdmin.ajaxUrl,
-                    type: 'POST',
-                    data: {
-                        action: 'gs1_delete_log',
-                        nonce: gs1GtinAdmin.nonce,
-                        filename: filename
-                    },
-                    success: (response) => {
-                        if (response.success) {
-                            alert('Log bestand verwijderd!');
-                            location.reload();
-                        } else {
-                            alert('Fout: ' + (response.data?.message || 'Onbekende fout'));
-                        }
-                    }
-                });
-            });
             $(document).on('change', '#gs1-log-level-filter', (e) => {
                 this.filterLogs($(e.target).val());
             });
@@ -148,16 +114,11 @@
                 $('#gs1-log-context-modal').hide();
             });
             
-            // Settings tab - GPC Mapping
+            // Settings tab
             $(document).on('click', '.gs1-test-connection', () => this.testConnection());
-            $(document).on('click', '.gs1-add-gpc-mapping', () => {
-                console.log('Add GPC mapping clicked');
-                this.addGpcMapping();
-            });
+            $(document).on('click', '.gs1-add-gpc-mapping', () => this.addGpcMapping());
             $(document).on('click', '.gs1-save-gpc-mapping', (e) => this.saveGpcMapping(e));
             $(document).on('click', '.gs1-delete-gpc-mapping', (e) => this.deleteGpcMapping(e));
-            
-            console.log('Events bound');
         },
         
         // Load products
@@ -204,6 +165,12 @@
                     'external': 'Extern'
                 };
                 
+                // Calculate 13-digit GTIN for display
+                let gtinDisplay = product.gtin || '-';
+                if (product.gtin && product.gtin !== '-' && product.gtin.length === 12) {
+                    gtinDisplay = this.calculateCheckdigit(product.gtin);
+                }
+                
                 const row = $('<tr>');
                 row.append(`
                     <th class="check-column">
@@ -216,7 +183,7 @@
                     <td>${product.sku || '-'}</td>
                     <td>${product.brand || '-'}</td>
                     <td>${product.ean || '-'}</td>
-                    <td>${product.gtin || '-'}</td>
+                    <td>${gtinDisplay}</td>
                     <td>
                         <span class="gs1-status-badge ${statusClass}">
                             ${statusLabels[product.status] || product.status}
@@ -268,7 +235,7 @@
             });
             
             const hasSelection = this.selectedProducts.length > 0;
-            $('#gs1-assign-selected, #gs1-unassign-selected, #gs1-register-selected, #gs1-mark-external').prop('disabled', !hasSelection);
+            $('#gs1-assign-selected, #gs1-register-selected, #gs1-mark-external').prop('disabled', !hasSelection);
         },
         
         changePage: function(direction) {
@@ -295,30 +262,6 @@
                     if (response.success) {
                         const result = response.data;
                         this.showSuccess(`${result.success.length} GTINs toegewezen. ${result.errors.length} fouten.`);
-                        this.loadProducts();
-                    } else {
-                        this.showError(response.data.message);
-                    }
-                }
-            });
-        },
-        
-        unassignGtins: function() {
-            if (this.selectedProducts.length === 0) return;
-            
-            if (!confirm(`GTIN verwijderen van ${this.selectedProducts.length} producten?\n\nLET OP: Dit werkt alleen voor producten die nog NIET bij GS1 zijn geregistreerd!`)) return;
-            
-            $.ajax({
-                url: gs1GtinAdmin.ajaxUrl,
-                type: 'POST',
-                data: {
-                    action: 'gs1_unassign_gtins',
-                    nonce: gs1GtinAdmin.nonce,
-                    product_ids: this.selectedProducts
-                },
-                success: (response) => {
-                    if (response.success) {
-                        this.showSuccess(response.data.message);
                         this.loadProducts();
                     } else {
                         this.showError(response.data.message);
@@ -447,10 +390,8 @@
                             </div>
                             <div class="gs1-form-group">
                                 <label>Status *</label>
-                                <select data-index="${index}" data-field="status">
-                                    <option value="Actief" ${product.data.status === 'Actief' ? 'selected' : ''}>Actief</option>
-                                    <option value="Inactief" ${product.data.status === 'Inactief' ? 'selected' : ''}>Inactief</option>
-                                </select>
+                                <input type="text" value="${product.data.status}" class="regular-text" 
+                                       data-index="${index}" data-field="status">
                             </div>
                         </div>
                         
@@ -718,34 +659,17 @@
         },
         
         addGpcMapping: function() {
-            console.log('addGpcMapping called');
             const template = $('#gs1-gpc-mapping-template').html();
-            console.log('Template HTML:', template);
-            
-            if (!template) {
-                alert('Template niet gevonden!');
-                return;
-            }
-            
-            const tbody = $('.gs1-gpc-mappings table tbody');
-            console.log('Tbody found:', tbody.length);
-            
-            if (tbody.length === 0) {
-                alert('Tabel niet gevonden!');
-                return;
-            }
-            
-            tbody.append(template);
-            console.log('Row toegevoegd');
+            $('.gs1-gpc-mappings table tbody').append(template);
         },
         
         saveGpcMapping: function(e) {
             const row = $(e.target).closest('tr');
-            const itemGroupId = row.find('select[name="item_group_id"]').val();
+            const categoryId = row.find('select[name="category_id"]').val();
             const gpcCode = row.find('input[name="gpc_code"]').val();
             const gpcTitle = row.find('input[name="gpc_title"]').val();
             
-            if (!itemGroupId || !gpcCode || !gpcTitle) {
+            if (!categoryId || !gpcCode || !gpcTitle) {
                 this.showError('Alle velden zijn verplicht');
                 return;
             }
@@ -756,7 +680,7 @@
                 data: {
                     action: 'gs1_save_gpc_mapping',
                     nonce: gs1GtinAdmin.nonce,
-                    item_group_id: itemGroupId,
+                    category_id: categoryId,
                     gpc_code: gpcCode,
                     gpc_title: gpcTitle
                 },
@@ -818,8 +742,5 @@
     $(document).ready(() => {
         GS1Admin.init();
     });
-    
-    // Expose globally for debugging
-    window.GS1Admin = GS1Admin;
     
 })(jQuery);
