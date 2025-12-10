@@ -26,6 +26,7 @@ class GS1_GTIN_Admin {
         add_action('wp_ajax_gs1_test_connection', [$this, 'ajax_test_connection']);
         add_action('wp_ajax_gs1_get_log', [$this, 'ajax_get_log']);
         add_action('wp_ajax_gs1_clear_log', [$this, 'ajax_clear_log']);
+        add_action('wp_ajax_gs1_delete_log', [$this, 'ajax_delete_log']);
     }
     
     public function add_menu_pages() {
@@ -55,7 +56,7 @@ class GS1_GTIN_Admin {
             'gs1-gtin-admin',
             GS1_GTIN_PLUGIN_URL . 'admin/assets/js/admin.js',
             ['jquery'],
-            '999.0.0',
+            time(),
             true
         );
         
@@ -404,6 +405,37 @@ class GS1_GTIN_Admin {
         GS1_GTIN_Logger::log('Log file cleared: ' . $filename, 'info');
         
         wp_send_json_success(['message' => 'Log geleegd']);
+    }
+    
+    public function ajax_delete_log() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        $filename = isset($_POST['filename']) ? sanitize_file_name($_POST['filename']) : '';
+        
+        if (empty($filename)) {
+            wp_send_json_error(['message' => 'Geen bestandsnaam opgegeven']);
+        }
+        
+        // Check if it's today's log file
+        $today_log = 'gs1-gtin-' . date('Y-m-d') . '.log';
+        if ($filename === $today_log) {
+            wp_send_json_error(['message' => 'Kan het huidige dag log bestand niet verwijderen. Gebruik "Leeg bestand" om de inhoud te wissen.']);
+        }
+        
+        $log_dir = wp_upload_dir()['basedir'] . '/gs1-gtin-logs/';
+        $file_path = $log_dir . $filename;
+        
+        if (!file_exists($file_path)) {
+            wp_send_json_error(['message' => 'Bestand niet gevonden']);
+        }
+        
+        if (!unlink($file_path)) {
+            wp_send_json_error(['message' => 'Kon bestand niet verwijderen. Mogelijk is het bestand nog in gebruik.']);
+        }
+        
+        GS1_GTIN_Logger::log('Log file deleted: ' . $filename, 'info');
+        
+        wp_send_json_success(['message' => 'Log bestand verwijderd']);
     }
 }
 

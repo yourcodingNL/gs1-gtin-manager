@@ -69,10 +69,10 @@ class GS1_GTIN_Manager {
             'measurement_unit' => 'kilogram'
         ];
         
-        // Try to get GPC from category mapping
-        $categories = $product->get_category_ids();
-        if (!empty($categories)) {
-            $gpc_mapping = GS1_GTIN_Database::get_gpc_mapping($categories[0]);
+        // Try to get GPC from Item Group (pa_xcore_item_group) mapping
+        $item_groups = wp_get_post_terms($product_id, 'pa_xcore_item_group', ['fields' => 'ids']);
+        if (!empty($item_groups) && !is_wp_error($item_groups)) {
+            $gpc_mapping = GS1_GTIN_Database::get_gpc_mapping($item_groups[0]);
             if ($gpc_mapping) {
                 $data['gpc_code'] = $gpc_mapping->gpc_code;
             }
@@ -152,25 +152,30 @@ class GS1_GTIN_Manager {
             $image_url = wp_get_attachment_url($image_id);
         }
         
-        // Get weight
+        // Get weight en converteer naar correct formaat
         $net_content = $product->get_weight();
-        $measurement_unit = 'kilogram';
+        $measurement_unit = 'Kilogram (1 kg)';
         
         // Convert weight to grams if needed
         if ($net_content && $net_content < 1) {
             $net_content = $net_content * 1000;
-            $measurement_unit = 'gram';
+            $measurement_unit = 'Gram (0.001 kg)';
         }
         
-        // Prepare data
+        // Ensure numeric value
+        if ($net_content) {
+            $net_content = floatval($net_content);
+        }
+        
+        // Prepare data met CORRECTE veldwaardes volgens GS1 API spec
         $data = [
             'gtin' => $assignment->gtin,
-            'status' => 'Active',
+            'status' => 'Actief', // "Actief" zoals in GS1 voorbeeld
             'description' => substr($product->get_name(), 0, 300), // Max 300 chars
             'brandName' => $brand,
-            'language' => 'nl',
-            'targetMarketCountry' => 'NL',
-            'consumerUnit' => $assignment->consumer_unit ? 'true' : 'false',
+            'language' => 'Nederlands', // "Nederlands" ipv "nl"
+            'targetMarketCountry' => 'Nederland', // "Nederland" ipv "NL"
+            'consumerUnit' => $assignment->consumer_unit ? 'Ja' : 'Nee', // "Ja"/"Nee" ipv "true"/"false"
             'packagingType' => $assignment->packaging_type ?: 'Doos',
             'contractNumber' => $assignment->contract_number
         ];
@@ -181,8 +186,8 @@ class GS1_GTIN_Manager {
         }
         
         if ($net_content) {
-            $data['netContent'] = (string) $net_content;
-            $data['measurementUnit'] = $measurement_unit;
+            $data['netContent'] = $net_content; // Numeric value
+            $data['measurementUnit'] = $measurement_unit; // "Kilogram (1 kg)" formaat
         }
         
         if ($image_url) {
@@ -212,6 +217,30 @@ class GS1_GTIN_Manager {
             // Use provided data or prepare from product
             if (isset($registration_data[$product_id])) {
                 $product_data = $registration_data[$product_id];
+                
+                // Ensure correcte veldwaardes (gebruiker kan deze hebben aangepast)
+                if (isset($product_data['language']) && $product_data['language'] === 'nl') {
+                    $product_data['language'] = 'Nederlands';
+                }
+                if (isset($product_data['targetMarketCountry']) && $product_data['targetMarketCountry'] === 'NL') {
+                    $product_data['targetMarketCountry'] = 'Nederland';
+                }
+                if (isset($product_data['consumerUnit'])) {
+                    if ($product_data['consumerUnit'] === 'true' || $product_data['consumerUnit'] === true) {
+                        $product_data['consumerUnit'] = 'Ja';
+                    } elseif ($product_data['consumerUnit'] === 'false' || $product_data['consumerUnit'] === false) {
+                        $product_data['consumerUnit'] = 'Nee';
+                    }
+                }
+                if (isset($product_data['status']) && strtolower($product_data['status']) === 'active') {
+                    $product_data['status'] = 'Actief';
+                }
+                
+                // Ensure netContent is numeric
+                if (isset($product_data['netContent']) && is_string($product_data['netContent'])) {
+                    $product_data['netContent'] = floatval($product_data['netContent']);
+                }
+                
                 $product_data['index'] = $index;
                 $product_data['gtin'] = $assignment->gtin;
                 $product_data['contractNumber'] = $assignment->contract_number;
@@ -242,8 +271,15 @@ class GS1_GTIN_Manager {
             return $result;
         }
         
-        // Get invocation ID
+        // Get invocation ID (plain text response)
         $invocation_id = $result['data'];
+        
+        if (empty($invocation_id)) {
+            return [
+                'success' => false,
+                'error' => 'Geen invocation ID ontvangen van GS1'
+            ];
+        }
         
         // Update assignments
         foreach ($product_ids as $product_id) {

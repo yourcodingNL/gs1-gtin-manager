@@ -162,23 +162,31 @@ class GS1_GTIN_Settings {
         <hr>
         
         <h2>GPC Categorie Mappings</h2>
-        <p>Koppel WooCommerce productcategorieën aan GS1 GPC codes. Dit zorgt ervoor dat de juiste GPC code automatisch wordt toegewezen.</p>
+        <p>Koppel Item Groups (pa_xcore_item_group) aan GS1 GPC codes. Dit zorgt ervoor dat de juiste GPC code automatisch wordt toegewezen.</p>
         
         <div class="gs1-gpc-mappings">
             <?php $this->render_gpc_mappings(); ?>
         </div>
         
-        <button type="button" class="button gs1-add-gpc-mapping">Nieuwe Mapping Toevoegen</button>
+        <button type="button" class="button gs1-add-gpc-mapping">+ Mapping Toevoegen</button>
         
         <script type="text/template" id="gs1-gpc-mapping-template">
             <tr>
                 <td>
-                    <select name="category_id" class="gs1-category-select">
-                        <option value="">Selecteer categorie...</option>
+                    <select name="item_group_id" class="gs1-item-group-select">
+                        <option value="">Selecteer Item Group...</option>
                         <?php
-                        $categories = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false]);
-                        foreach ($categories as $cat) {
-                            echo '<option value="' . $cat->term_id . '">' . esc_html($cat->name) . '</option>';
+                        $item_groups = get_terms([
+                            'taxonomy' => 'pa_xcore_item_group', 
+                            'hide_empty' => false,
+                            'orderby' => 'name',
+                            'order' => 'ASC'
+                        ]);
+                        
+                        if (!is_wp_error($item_groups) && !empty($item_groups)) {
+                            foreach ($item_groups as $group) {
+                                echo '<option value="' . $group->term_id . '">' . esc_html($group->name) . '</option>';
+                            }
                         }
                         ?>
                     </select>
@@ -192,7 +200,7 @@ class GS1_GTIN_Settings {
                 </td>
                 <td>
                     <button type="button" class="button gs1-save-gpc-mapping">Opslaan</button>
-                    <button type="button" class="button gs1-delete-gpc-mapping">Verwijderen</button>
+                    <button type="button" class="button gs1-cancel-gpc-mapping">Annuleren</button>
                 </td>
             </tr>
         </script>
@@ -204,37 +212,40 @@ class GS1_GTIN_Settings {
         $table = $wpdb->prefix . 'gs1_gtin_gpc_mappings';
         $mappings = $wpdb->get_results("SELECT * FROM {$table} ORDER BY wc_category_id");
         
-        if (empty($mappings)) {
-            echo '<p>Geen GPC mappings geconfigureerd.</p>';
-            return;
-        }
-        
         ?>
         <table class="wp-list-table widefat fixed striped">
             <thead>
                 <tr>
-                    <th>WooCommerce Categorie</th>
+                    <th>Item Group (pa_xcore_item_group)</th>
                     <th>GPC Code</th>
                     <th>GPC Titel</th>
                     <th>Acties</th>
                 </tr>
             </thead>
             <tbody>
-                <?php foreach ($mappings as $mapping): 
-                    $category = get_term($mapping->wc_category_id, 'product_cat');
-                ?>
-                <tr data-mapping-id="<?php echo $mapping->id; ?>">
-                    <td><?php echo $category ? esc_html($category->name) : 'Categorie niet gevonden'; ?></td>
-                    <td><?php echo esc_html($mapping->gpc_code); ?></td>
-                    <td><?php echo esc_html($mapping->gpc_title); ?></td>
-                    <td>
-                        <button type="button" class="button gs1-delete-gpc-mapping" 
-                                data-category-id="<?php echo $mapping->wc_category_id; ?>">
-                            Verwijderen
-                        </button>
+                <?php if (empty($mappings)): ?>
+                <tr>
+                    <td colspan="4" style="text-align:center;padding:20px;color:#646970;">
+                        <em>Nog geen GPC mappings. Klik op "+ Mapping Toevoegen" om te beginnen.</em>
                     </td>
                 </tr>
-                <?php endforeach; ?>
+                <?php else: ?>
+                    <?php foreach ($mappings as $mapping): 
+                        $item_group = get_term($mapping->wc_category_id, 'pa_xcore_item_group');
+                    ?>
+                    <tr data-mapping-id="<?php echo $mapping->id; ?>">
+                        <td><?php echo $item_group && !is_wp_error($item_group) ? esc_html($item_group->name) : 'Item Group niet gevonden'; ?></td>
+                        <td><?php echo esc_html($mapping->gpc_code); ?></td>
+                        <td><?php echo esc_html($mapping->gpc_title); ?></td>
+                        <td>
+                            <button type="button" class="button gs1-delete-gpc-mapping" 
+                                    data-category-id="<?php echo $mapping->wc_category_id; ?>">
+                                Verwijderen
+                            </button>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                <?php endif; ?>
             </tbody>
         </table>
         <?php
@@ -261,15 +272,22 @@ class GS1_GTIN_Settings {
     public function ajax_save_gpc_mapping() {
         check_ajax_referer('gs1_gtin_nonce', 'nonce');
         
-        $category_id = intval($_POST['category_id'] ?? 0);
+        // Gebruik item_group_id nu in plaats van category_id
+        $item_group_id = intval($_POST['item_group_id'] ?? 0);
         $gpc_code = sanitize_text_field($_POST['gpc_code'] ?? '');
         $gpc_title = sanitize_text_field($_POST['gpc_title'] ?? '');
         
-        if (empty($category_id) || empty($gpc_code) || empty($gpc_title)) {
+        if (empty($item_group_id) || empty($gpc_code) || empty($gpc_title)) {
             wp_send_json_error(['message' => 'Alle velden zijn verplicht']);
         }
         
-        GS1_GTIN_Database::save_gpc_mapping($category_id, $gpc_code, $gpc_title);
+        // Verify that term exists
+        $term = get_term($item_group_id, 'pa_xcore_item_group');
+        if (is_wp_error($term) || !$term) {
+            wp_send_json_error(['message' => 'Item Group niet gevonden']);
+        }
+        
+        GS1_GTIN_Database::save_gpc_mapping($item_group_id, $gpc_code, $gpc_title);
         
         wp_send_json_success(['message' => 'GPC mapping opgeslagen']);
     }
@@ -277,18 +295,18 @@ class GS1_GTIN_Settings {
     public function ajax_delete_gpc_mapping() {
         check_ajax_referer('gs1_gtin_nonce', 'nonce');
         
-        $category_id = intval($_POST['category_id'] ?? 0);
+        $item_group_id = intval($_POST['category_id'] ?? 0); // Blijft category_id in POST voor backwards compatibility
         
-        if (empty($category_id)) {
-            wp_send_json_error(['message' => 'Geen categorie ID opgegeven']);
+        if (empty($item_group_id)) {
+            wp_send_json_error(['message' => 'Geen Item Group ID opgegeven']);
         }
         
         global $wpdb;
         $table = $wpdb->prefix . 'gs1_gtin_gpc_mappings';
         
-        $wpdb->delete($table, ['wc_category_id' => $category_id], ['%d']);
+        $wpdb->delete($table, ['wc_category_id' => $item_group_id], ['%d']);
         
-        GS1_GTIN_Logger::log("GPC mapping deleted for category {$category_id}", 'info');
+        GS1_GTIN_Logger::log("GPC mapping deleted for item group {$item_group_id}", 'info');
         
         wp_send_json_success(['message' => 'GPC mapping verwijderd']);
     }

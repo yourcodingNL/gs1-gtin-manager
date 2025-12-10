@@ -82,7 +82,7 @@
                 });
             });
             $(document).on('click', '#gs1-clear-log', () => {
-                if (!confirm('Weet je zeker dat je deze log wilt legen?')) return;
+                if (!confirm('Weet je zeker dat je deze log wilt legen? De inhoud wordt verwijderd maar het bestand blijft bestaan.')) return;
                 
                 const filename = $('#gs1-current-log-name').text();
                 $.ajax({
@@ -97,6 +97,36 @@
                         if (response.success) {
                             $('#gs1-log-content-pre').text('');
                             alert('Log geleegd!');
+                        } else {
+                            alert('Fout: ' + (response.data?.message || 'Onbekende fout'));
+                        }
+                    }
+                });
+            });
+            $(document).on('click', '.gs1-delete-log, #gs1-delete-current-log', (e) => {
+                let filename;
+                if ($(e.target).attr('id') === 'gs1-delete-current-log') {
+                    filename = $('#gs1-current-log-name').text();
+                } else {
+                    filename = $(e.target).data('filename');
+                }
+                
+                if (!confirm('Weet je zeker dat je "' + filename + '" permanent wilt verwijderen?')) return;
+                
+                $.ajax({
+                    url: gs1GtinAdmin.ajaxUrl,
+                    type: 'POST',
+                    data: {
+                        action: 'gs1_delete_log',
+                        nonce: gs1GtinAdmin.nonce,
+                        filename: filename
+                    },
+                    success: (response) => {
+                        if (response.success) {
+                            alert('Log bestand verwijderd!');
+                            location.reload();
+                        } else {
+                            alert('Fout: ' + (response.data?.message || 'Onbekende fout'));
                         }
                     }
                 });
@@ -417,8 +447,10 @@
                             </div>
                             <div class="gs1-form-group">
                                 <label>Status *</label>
-                                <input type="text" value="${product.data.status}" class="regular-text" 
-                                       data-index="${index}" data-field="status">
+                                <select data-index="${index}" data-field="status">
+                                    <option value="Actief" ${product.data.status === 'Actief' ? 'selected' : ''}>Actief</option>
+                                    <option value="Inactief" ${product.data.status === 'Inactief' ? 'selected' : ''}>Inactief</option>
+                                </select>
                             </div>
                         </div>
                         
@@ -709,11 +741,11 @@
         
         saveGpcMapping: function(e) {
             const row = $(e.target).closest('tr');
-            const categoryId = row.find('select[name="category_id"]').val();
+            const itemGroupId = row.find('select[name="item_group_id"]').val();
             const gpcCode = row.find('input[name="gpc_code"]').val();
             const gpcTitle = row.find('input[name="gpc_title"]').val();
             
-            if (!categoryId || !gpcCode || !gpcTitle) {
+            if (!itemGroupId || !gpcCode || !gpcTitle) {
                 this.showError('Alle velden zijn verplicht');
                 return;
             }
@@ -724,7 +756,7 @@
                 data: {
                     action: 'gs1_save_gpc_mapping',
                     nonce: gs1GtinAdmin.nonce,
-                    category_id: categoryId,
+                    item_group_id: itemGroupId,
                     gpc_code: gpcCode,
                     gpc_title: gpcTitle
                 },

@@ -142,6 +142,25 @@ class GS1_GTIN_API_Client {
         
         $response_code = wp_remote_retrieve_response_code($response);
         $response_body = wp_remote_retrieve_body($response);
+        
+        // BELANGRIJK: 202 response is plain text (InvocationId), geen JSON!
+        if ($response_code === 202 && strpos($endpoint, '/RegistrateGtinProducts') !== false) {
+            GS1_GTIN_Logger::log("API Request: {$method} {$endpoint}", 'info', [
+                'endpoint' => $endpoint,
+                'method' => $method,
+                'request' => $data,
+                'response' => $response_body,
+                'response_code' => $response_code
+            ]);
+            
+            return [
+                'success' => true,
+                'data' => trim($response_body), // Plain text InvocationId
+                'code' => $response_code
+            ];
+        }
+        
+        // Andere responses zijn JSON
         $response_data = json_decode($response_body, true);
         
         GS1_GTIN_Logger::log_api_request($endpoint, $method, $data, $response_data, $response_code);
@@ -267,11 +286,17 @@ class GS1_GTIN_API_Client {
             return;
         }
         
-        // Get all registration results (pagination may be needed for large datasets)
-        // For now, we'll get the most recent batch
-        $invocation_id = $status_result['data']['Item1'] ?? null;
+        // De response is een object met Item1 en Item2
+        $invocation_id = null;
         
-        if (!$invocation_id) {
+        if (isset($status_result['data']['Item1'])) {
+            $invocation_id = $status_result['data']['Item1'];
+        } elseif (isset($status_result['data']['invocationId'])) {
+            $invocation_id = $status_result['data']['invocationId'];
+        }
+        
+        if (!$invocation_id || empty($invocation_id)) {
+            GS1_GTIN_Logger::log('No invocation ID in status response', 'info');
             return;
         }
         
