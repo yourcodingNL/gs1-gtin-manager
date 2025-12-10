@@ -24,6 +24,8 @@
             if ($('#gs1-products-table').length) {
                 this.loadProducts();
             }
+            
+            console.log('GS1Admin initialized');
         },
         
         bindEvents: function() {
@@ -116,11 +118,16 @@
                 $('#gs1-log-context-modal').hide();
             });
             
-            // Settings tab
+            // Settings tab - GPC Mapping
             $(document).on('click', '.gs1-test-connection', () => this.testConnection());
-            $(document).on('click', '.gs1-add-gpc-mapping', () => this.addGpcMapping());
+            $(document).on('click', '.gs1-add-gpc-mapping', () => {
+                console.log('Add GPC mapping clicked');
+                this.addGpcMapping();
+            });
             $(document).on('click', '.gs1-save-gpc-mapping', (e) => this.saveGpcMapping(e));
             $(document).on('click', '.gs1-delete-gpc-mapping', (e) => this.deleteGpcMapping(e));
+            
+            console.log('Events bound');
         },
         
         // Load products
@@ -679,8 +686,25 @@
         },
         
         addGpcMapping: function() {
+            console.log('addGpcMapping called');
             const template = $('#gs1-gpc-mapping-template').html();
-            $('.gs1-gpc-mappings table tbody').append(template);
+            console.log('Template HTML:', template);
+            
+            if (!template) {
+                alert('Template niet gevonden!');
+                return;
+            }
+            
+            const tbody = $('.gs1-gpc-mappings table tbody');
+            console.log('Tbody found:', tbody.length);
+            
+            if (tbody.length === 0) {
+                alert('Tabel niet gevonden!');
+                return;
+            }
+            
+            tbody.append(template);
+            console.log('Row toegevoegd');
         },
         
         saveGpcMapping: function(e) {
@@ -762,5 +786,8 @@
     $(document).ready(() => {
         GS1Admin.init();
     });
+    
+    // Expose globally for debugging
+    window.GS1Admin = GS1Admin;
     
 })(jQuery);
