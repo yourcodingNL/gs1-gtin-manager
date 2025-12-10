@@ -1,8 +1,8 @@
 <?php
 /**
- * GTIN Manager
+ * GTIN Manager - HYBRID A Implementation
  * 
- * Handles GTIN assignment and management
+ * Handles GTIN assignment and management with 12-digit GTINs (without checkdigit)
  * 
  * @package GS1_GTIN_Manager
  * @author YoCo - Sebastiaan Kalkman
@@ -15,7 +15,7 @@ if (!defined('ABSPATH')) {
 class GS1_GTIN_Manager {
     
     /**
-     * Assign GTIN to product
+     * Assign GTIN to product (12 digits, without checkdigit)
      */
     public static function assign_gtin($product_id, $contract_number = null, $external = false) {
         // Check if already has GTIN
@@ -39,10 +39,10 @@ class GS1_GTIN_Manager {
             ];
         }
         
-        // Get next available GTIN
-        $gtin = GS1_GTIN_Database::get_next_available_gtin($contract_number);
+        // Get next available GTIN (12 digits, without checkdigit)
+        $gtin12 = GS1_GTIN_Database::get_next_available_gtin($contract_number);
         
-        if (!$gtin) {
+        if (!$gtin12) {
             return [
                 'success' => false,
                 'error' => 'Geen beschikbare GTIN in range'
@@ -58,15 +58,28 @@ class GS1_GTIN_Manager {
             ];
         }
         
+        // Get quantity from product (default 1)
+        $quantity = get_post_meta($product_id, '_quantity_per_unit', true) ?: 1;
+        
+        // Bepaal measurement unit
+        $measurement_unit = 'Stuks'; // Default
+        
+        // Check if it's a pair
+        if (stripos($product->get_name(), 'paar') !== false || 
+            stripos($product->get_name(), 'pair') !== false) {
+            $measurement_unit = 'Paar';
+            $quantity = 1; // 1 paar
+        }
+        
         // Prepare data
         $data = [
             'product_id' => $product_id,
-            'gtin' => $gtin,
+            'gtin' => $gtin12, // 12 digits!
             'contract_number' => $contract_number,
             'status' => $external ? 'external' : 'pending',
             'external_registration' => $external ? 1 : 0,
-            'net_content' => $product->get_weight(),
-            'measurement_unit' => 'kilogram'
+            'net_content' => $quantity,
+            'measurement_unit' => $measurement_unit
         ];
         
         // Try to get GPC from Item Group (pa_xcore_item_group) mapping
@@ -80,9 +93,13 @@ class GS1_GTIN_Manager {
         
         $assignment_id = GS1_GTIN_Database::save_gtin_assignment($data);
         
+        // Calculate checkdigit for display
+        $gtin13_display = GS1_GTIN_Helpers::add_checkdigit($gtin12);
+        
         return [
             'success' => true,
-            'gtin' => $gtin,
+            'gtin' => $gtin12, // 12 digits for storage/API
+            'gtin_display' => $gtin13_display, // 13 digits for user display
             'assignment_id' => $assignment_id
         ];
     }
@@ -102,7 +119,8 @@ class GS1_GTIN_Manager {
             if ($result['success']) {
                 $results['success'][] = [
                     'product_id' => $product_id,
-                    'gtin' => $result['gtin']
+                    'gtin' => $result['gtin'],
+                    'gtin_display' => $result['gtin_display']
                 ];
             } else {
                 $results['errors'][] = [
@@ -152,42 +170,44 @@ class GS1_GTIN_Manager {
             $image_url = wp_get_attachment_url($image_id);
         }
         
-        // Get weight en converteer naar correct formaat
-        $net_content = $product->get_weight();
-        $measurement_unit = 'Kilogram (1 kg)';
-        
-        // Convert weight to grams if needed
-        if ($net_content && $net_content < 1) {
-            $net_content = $net_content * 1000;
-            $measurement_unit = 'Gram (0.001 kg)';
+        // Get packaging type from product meta or default
+        $packaging_type = get_post_meta($product_id, '_packaging_type', true);
+        if (!$packaging_type) {
+            $packaging_type = 'Zak'; // Default
         }
         
-        // Ensure numeric value
-        if ($net_content) {
-            $net_content = floatval($net_content);
+        // Ensure packaging type is in correct format
+        $packaging_mappings = GS1_GTIN_Helpers::get_packaging_types();
+        $packaging_key = strtolower(str_replace(' ', '_', $packaging_type));
+        if (isset($packaging_mappings[$packaging_key])) {
+            $packaging_type = $packaging_mappings[$packaging_key];
         }
         
-        // Prepare data met CORRECTE veldwaardes volgens GS1 API spec
+        // Get net content and measurement unit from assignment or product
+        $net_content = $assignment->net_content ?: 1;
+        $measurement_unit = $assignment->measurement_unit ?: 'Stuks';
+        
+        // Ensure correct capitalization
+        $measurement_unit = ucfirst(strtolower($measurement_unit));
+        
+        // Prepare data with CORRECT field values according to GS1 API spec
         $data = [
-            'gtin' => $assignment->gtin,
-            'status' => 'Actief', // "Actief" zoals in GS1 voorbeeld
+            'gtin' => $assignment->gtin, // 12 digits (without checkdigit)
+            'status' => 'Actief',
             'description' => substr($product->get_name(), 0, 300), // Max 300 chars
             'brandName' => $brand,
-            'language' => 'Nederlands', // "Nederlands" ipv "nl"
-            'targetMarketCountry' => 'Nederland', // "Nederland" ipv "NL"
-            'consumerUnit' => $assignment->consumer_unit ? 'Ja' : 'Nee', // "Ja"/"Nee" ipv "true"/"false"
-            'packagingType' => $assignment->packaging_type ?: 'Doos',
-            'contractNumber' => $assignment->contract_number
+            'language' => 'Nederlands',
+            'targetMarketCountry' => 'Europese Unie',
+            'consumerUnit' => 'Ja', // Always Ja for consumer products
+            'packagingType' => $packaging_type,
+            'contractNumber' => $assignment->contract_number,
+            'netContent' => intval($net_content), // Integer!
+            'measurementUnit' => $measurement_unit // "Stuks", "Paar", or "Sets"
         ];
         
         // Add optional fields
-        if ($assignment->gpc_code) {
+        if ($assignment->gpc_code && !empty($assignment->gpc_code)) {
             $data['gpc'] = $assignment->gpc_code;
-        }
-        
-        if ($net_content) {
-            $data['netContent'] = $net_content; // Numeric value
-            $data['measurementUnit'] = $measurement_unit; // "Kilogram (1 kg)" formaat
         }
         
         if ($image_url) {
@@ -218,31 +238,39 @@ class GS1_GTIN_Manager {
             if (isset($registration_data[$product_id])) {
                 $product_data = $registration_data[$product_id];
                 
-                // Ensure correcte veldwaardes (gebruiker kan deze hebben aangepast)
-                if (isset($product_data['language']) && $product_data['language'] === 'nl') {
-                    $product_data['language'] = 'Nederlands';
-                }
-                if (isset($product_data['targetMarketCountry']) && $product_data['targetMarketCountry'] === 'NL') {
-                    $product_data['targetMarketCountry'] = 'Nederland';
-                }
-                if (isset($product_data['consumerUnit'])) {
-                    if ($product_data['consumerUnit'] === 'true' || $product_data['consumerUnit'] === true) {
-                        $product_data['consumerUnit'] = 'Ja';
-                    } elseif ($product_data['consumerUnit'] === 'false' || $product_data['consumerUnit'] === false) {
-                        $product_data['consumerUnit'] = 'Nee';
-                    }
-                }
-                if (isset($product_data['status']) && strtolower($product_data['status']) === 'active') {
-                    $product_data['status'] = 'Actief';
+                // Sanitize and convert user-edited values
+                if (isset($product_data['language'])) {
+                    $product_data['language'] = GS1_GTIN_Helpers::convert_language_code($product_data['language']);
                 }
                 
-                // Ensure netContent is numeric
-                if (isset($product_data['netContent']) && is_string($product_data['netContent'])) {
-                    $product_data['netContent'] = floatval($product_data['netContent']);
+                if (isset($product_data['targetMarketCountry'])) {
+                    $countries = GS1_GTIN_Helpers::get_target_market_countries();
+                    $country_key = strtolower($product_data['targetMarketCountry']);
+                    if (isset($countries[$country_key])) {
+                        $product_data['targetMarketCountry'] = $countries[$country_key];
+                    }
+                }
+                
+                if (isset($product_data['consumerUnit'])) {
+                    $product_data['consumerUnit'] = GS1_GTIN_Helpers::convert_boolean($product_data['consumerUnit']);
+                }
+                
+                if (isset($product_data['status'])) {
+                    $product_data['status'] = GS1_GTIN_Helpers::convert_status($product_data['status']);
+                }
+                
+                // Ensure netContent is integer
+                if (isset($product_data['netContent'])) {
+                    $product_data['netContent'] = intval($product_data['netContent']);
+                }
+                
+                // Ensure measurementUnit has correct capitalization
+                if (isset($product_data['measurementUnit'])) {
+                    $product_data['measurementUnit'] = ucfirst(strtolower($product_data['measurementUnit']));
                 }
                 
                 $product_data['index'] = $index;
-                $product_data['gtin'] = $assignment->gtin;
+                $product_data['gtin'] = $assignment->gtin; // 12 digits!
                 $product_data['contractNumber'] = $assignment->contract_number;
             } else {
                 $product_data = self::prepare_registration_data($product_id);
@@ -325,12 +353,17 @@ class GS1_GTIN_Manager {
                     continue;
                 }
                 
+                // Remove checkdigit if GS1 added it (we store 12 digits)
+                $gtin = strlen($product['gtin']) === 13 
+                    ? GS1_GTIN_Helpers::remove_checkdigit($product['gtin'])
+                    : $product['gtin'];
+                
                 // Find assignment by GTIN
                 global $wpdb;
                 $table = $wpdb->prefix . 'gs1_gtin_assignments';
                 $assignment = $wpdb->get_row($wpdb->prepare(
                     "SELECT * FROM {$table} WHERE gtin = %s AND invocation_id = %s",
-                    $product['gtin'],
+                    $gtin,
                     $invocation_id
                 ));
                 

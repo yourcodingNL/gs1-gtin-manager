@@ -124,9 +124,12 @@ class GS1_GTIN_Database {
         global $wpdb;
         $table = $wpdb->prefix . 'gs1_gtin_assignments';
         
+        // Normalize to 12 digits
+        $gtin12 = self::normalize_gtin($gtin);
+        
         return $wpdb->get_row($wpdb->prepare(
             "SELECT * FROM {$table} WHERE gtin = %s",
-            $gtin
+            $gtin12
         ));
     }
     
@@ -137,9 +140,12 @@ class GS1_GTIN_Database {
         global $wpdb;
         $table = $wpdb->prefix . 'gs1_gtin_assignments';
         
+        // Normalize to 12 digits
+        $gtin12 = self::normalize_gtin($gtin);
+        
         $wpdb->insert($table, [
             'product_id' => 0,
-            'gtin' => $gtin,
+            'gtin' => $gtin12,
             'status' => 'registered',
             'external_registration' => 1,
             'contract_number' => $data['contract_number'] ?? null
@@ -202,7 +208,7 @@ class GS1_GTIN_Database {
             if (!empty($brand_products)) {
                 $where[] = "product_id IN (" . implode(',', array_map('intval', $brand_products)) . ")";
             } else {
-                $where[] = "1=0"; // No results if brand has no products
+                $where[] = "1=0";
             }
         }
         
@@ -272,6 +278,11 @@ class GS1_GTIN_Database {
         ];
         
         $data = wp_parse_args($data, $defaults);
+        
+        // Normalize GTIN to 12 digits
+        if (!empty($data['gtin'])) {
+            $data['gtin'] = self::normalize_gtin($data['gtin']);
+        }
         
         // Check if exists
         $existing = self::get_gtin_assignment($data['product_id']);
@@ -369,7 +380,7 @@ class GS1_GTIN_Database {
     }
     
     /**
-     * Get next available GTIN
+     * Get next available GTIN (12 digits without checkdigit)
      */
     public static function get_next_available_gtin($contract_number) {
         global $wpdb;
@@ -386,20 +397,35 @@ class GS1_GTIN_Database {
             return false;
         }
         
+        // Remove checkdigit from range numbers if present
+        $start_number = strlen($range->start_number) === 13 
+            ? substr($range->start_number, 0, 12)
+            : $range->start_number;
+            
+        $end_number = strlen($range->end_number) === 13
+            ? substr($range->end_number, 0, 12)
+            : $range->end_number;
+        
         // Get last used GTIN
         if ($range->last_used) {
-            $next_gtin = strval(intval($range->last_used) + 1);
+            $last_used = strlen($range->last_used) === 13
+                ? substr($range->last_used, 0, 12)
+                : $range->last_used;
+            $next_gtin = strval(intval($last_used) + 1);
         } else {
-            $next_gtin = $range->start_number;
+            $next_gtin = $start_number;
         }
         
+        // Ensure 12 digits
+        $next_gtin = str_pad($next_gtin, 12, '0', STR_PAD_LEFT);
+        
         // Check if within range
-        if (intval($next_gtin) > intval($range->end_number)) {
+        if (intval($next_gtin) > intval($end_number)) {
             GS1_GTIN_Logger::log("GTIN range uitgeput voor contract {$contract_number}", 'error');
             return false;
         }
         
-        // Check if already assigned (double check)
+        // Check if already assigned
         $already_assigned = $wpdb->get_var($wpdb->prepare(
             "SELECT COUNT(*) FROM {$assignments_table} WHERE gtin = %s",
             $next_gtin
@@ -411,12 +437,13 @@ class GS1_GTIN_Database {
                 "SELECT MAX(CAST(gtin AS UNSIGNED)) FROM {$assignments_table} 
                 WHERE contract_number = %s AND CAST(gtin AS UNSIGNED) BETWEEN %d AND %d",
                 $contract_number,
-                intval($range->start_number),
-                intval($range->end_number)
+                intval($start_number),
+                intval($end_number)
             ));
             
             if ($max_assigned) {
                 $next_gtin = strval(intval($max_assigned) + 1);
+                $next_gtin = str_pad($next_gtin, 12, '0', STR_PAD_LEFT);
             }
         }
         
@@ -429,7 +456,7 @@ class GS1_GTIN_Database {
             ['%d']
         );
         
-        return $next_gtin;
+        return $next_gtin; // Returns 12 digits
     }
     
     /**
@@ -478,5 +505,22 @@ class GS1_GTIN_Database {
         }
         
         GS1_GTIN_Logger::log("GPC mapping saved: Category {$category_id} -> {$gpc_code}", 'info');
+    }
+    
+    /**
+     * Display GTIN with checkdigit (13 digits)
+     */
+    public static function get_gtin_with_checkdigit($gtin12) {
+        return GS1_GTIN_Helpers::add_checkdigit($gtin12);
+    }
+    
+    /**
+     * Normalize GTIN to 12 digits (remove checkdigit if present)
+     */
+    public static function normalize_gtin($gtin) {
+        if (strlen($gtin) === 13) {
+            return substr($gtin, 0, 12);
+        }
+        return str_pad($gtin, 12, '0', STR_PAD_LEFT);
     }
 }
