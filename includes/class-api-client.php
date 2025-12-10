@@ -122,9 +122,21 @@ class GS1_GTIN_API_Client {
         }
         
         GS1_GTIN_Logger::log("API Request: {$method} {$endpoint}", 'debug', [
-            'url' => $url,
-            'data' => $data
-        ]);
+    'url' => $url,
+    'data' => $data
+]);
+
+// LOG EXACTE JSON DIE NAAR GS1 GAAT
+if ($data && in_array($method, ['POST', 'PUT', 'PATCH'])) {
+    $json_body = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    GS1_GTIN_Logger::log("=== EXACTE JSON NAAR GS1 API ===", 'info', [
+        'endpoint' => $endpoint,
+        'json_body' => $json_body,
+        'json_length' => strlen($json_body)
+    ]);
+}
+
+$response = wp_remote_request($url, $args);
         
         $response = wp_remote_request($url, $args);
         

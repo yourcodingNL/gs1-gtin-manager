@@ -27,12 +27,12 @@ class GS1_GTIN_Plugin {
     }
     
     private function load_dependencies() {
-        require_once GS1_GTIN_PLUGIN_DIR . 'includes/class-logger.php';
-        require_once GS1_GTIN_PLUGIN_DIR . 'includes/class-database.php';
-        require_once GS1_GTIN_PLUGIN_DIR . 'includes/class-api-client.php';
-        require_once GS1_GTIN_PLUGIN_DIR . 'includes/class-gtin-manager.php';
-        require_once GS1_GTIN_PLUGIN_DIR . 'includes/class-background-processor.php';
-        
+    require_once GS1_GTIN_PLUGIN_DIR . 'includes/class-logger.php';
+    require_once GS1_GTIN_PLUGIN_DIR . 'includes/class-gtin-helpers.php';
+    require_once GS1_GTIN_PLUGIN_DIR . 'includes/class-database.php';
+    require_once GS1_GTIN_PLUGIN_DIR . 'includes/class-api-client.php';
+    require_once GS1_GTIN_PLUGIN_DIR . 'includes/class-gtin-manager.php';
+    require_once GS1_GTIN_PLUGIN_DIR . 'includes/class-background-processor.php';
         if (is_admin()) {
             require_once GS1_GTIN_PLUGIN_DIR . 'admin/class-admin.php';
             require_once GS1_GTIN_PLUGIN_DIR . 'admin/class-settings.php';

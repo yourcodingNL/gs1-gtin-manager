@@ -146,76 +146,147 @@ class GS1_GTIN_Manager {
      * Prepare product data for GS1 registration
      */
     public static function prepare_registration_data($product_id) {
+    GS1_GTIN_Logger::log("=== PREPARE REGISTRATION DATA START: Product {$product_id} ===", 'debug');
+    
+    try {
+        // Get product
         $product = wc_get_product($product_id);
         if (!$product) {
+            GS1_GTIN_Logger::log("Product {$product_id} not found in prepare_registration_data", 'error');
             return false;
         }
         
+        GS1_GTIN_Logger::log("Product loaded", 'debug', [
+            'id' => $product_id,
+            'name' => $product->get_name(),
+            'type' => $product->get_type()
+        ]);
+        
+        // Get assignment
         $assignment = GS1_GTIN_Database::get_gtin_assignment($product_id);
         if (!$assignment) {
+            GS1_GTIN_Logger::log("No assignment found for product {$product_id}", 'error');
             return false;
         }
         
-        // Get brand from attributes
+        GS1_GTIN_Logger::log("Assignment loaded", 'debug', [
+            'gtin' => $assignment->gtin,
+            'contract' => $assignment->contract_number,
+            'status' => $assignment->status
+        ]);
+        
+        // Get brand
         $brand = '';
-        $brand_attribute = $product->get_attribute('pa_brand');
-        if ($brand_attribute) {
-            $brand = $brand_attribute;
+        try {
+            $brand_attribute = $product->get_attribute('pa_brand');
+            if ($brand_attribute) {
+                $brand = $brand_attribute;
+                GS1_GTIN_Logger::log("Brand found: {$brand}", 'debug');
+            } else {
+                GS1_GTIN_Logger::log("No brand attribute found", 'debug');
+            }
+        } catch (Exception $e) {
+            GS1_GTIN_Logger::log("Error getting brand", 'warning', ['error' => $e->getMessage()]);
         }
         
-        // Get first image
+        // Get image
         $image_url = '';
-        $image_id = $product->get_image_id();
-        if ($image_id) {
-            $image_url = wp_get_attachment_url($image_id);
+        try {
+            $image_id = $product->get_image_id();
+            if ($image_id) {
+                $image_url = wp_get_attachment_url($image_id);
+                GS1_GTIN_Logger::log("Image found: {$image_url}", 'debug');
+            } else {
+                GS1_GTIN_Logger::log("No image found", 'debug');
+            }
+        } catch (Exception $e) {
+            GS1_GTIN_Logger::log("Error getting image", 'warning', ['error' => $e->getMessage()]);
         }
         
-        // Get packaging type from product meta or default
+        // Get packaging type
         $packaging_type = get_post_meta($product_id, '_packaging_type', true);
         if (!$packaging_type) {
-            $packaging_type = 'Zak'; // Default
+            $packaging_type = 'Zak';
+            GS1_GTIN_Logger::log("No packaging type, using default: Zak", 'debug');
+        } else {
+            GS1_GTIN_Logger::log("Packaging type: {$packaging_type}", 'debug');
         }
-        
-        // Ensure packaging type is in correct format
-        $packaging_mappings = GS1_GTIN_Helpers::get_packaging_types();
+        GS1_GTIN_Logger::log("About to get packaging mappings", 'debug');
+
+// Ensure correct format
+try {
+    $packaging_mappings = GS1_GTIN_Helpers::get_packaging_types();
+    GS1_GTIN_Logger::log("Got packaging mappings", 'debug', ['count' => count($packaging_mappings)]);
+} catch (Exception $e) {
+    GS1_GTIN_Logger::log("EXCEPTION getting packaging mappings", 'error', [
+        'message' => $e->getMessage(),
+        'file' => $e->getFile(),
+        'line' => $e->getLine()
+    ]);
+    $packaging_mappings = ['zak' => 'Zak'];
+}
         $packaging_key = strtolower(str_replace(' ', '_', $packaging_type));
         if (isset($packaging_mappings[$packaging_key])) {
             $packaging_type = $packaging_mappings[$packaging_key];
         }
         
-        // Get net content and measurement unit from assignment or product
-        $net_content = $assignment->net_content ?: 1;
-        $measurement_unit = $assignment->measurement_unit ?: 'Stuks';
+        GS1_GTIN_Logger::log("Packaging type after mapping: {$packaging_type}", 'debug');
+        
+        // Get net content and measurement unit
+$net_content = isset($assignment->net_content) && $assignment->net_content ? $assignment->net_content : 1;
+$measurement_unit = isset($assignment->measurement_unit) && $assignment->measurement_unit ? $assignment->measurement_unit : 'Stuks';
+
+GS1_GTIN_Logger::log("Net content: {$net_content}, Unit: {$measurement_unit}", 'debug');
         
         // Ensure correct capitalization
         $measurement_unit = ucfirst(strtolower($measurement_unit));
         
-        // Prepare data with CORRECT field values according to GS1 API spec
+        // Build data array
         $data = [
-            'gtin' => $assignment->gtin, // 12 digits (without checkdigit)
+            'gtin' => $assignment->gtin,
             'status' => 'Actief',
-            'description' => substr($product->get_name(), 0, 300), // Max 300 chars
+            'description' => substr($product->get_name(), 0, 300),
             'brandName' => $brand,
             'language' => 'Nederlands',
             'targetMarketCountry' => 'Europese Unie',
-            'consumerUnit' => 'Ja', // Always Ja for consumer products
+            'consumerUnit' => 'Ja',
             'packagingType' => $packaging_type,
             'contractNumber' => $assignment->contract_number,
-            'netContent' => intval($net_content), // Integer!
-            'measurementUnit' => $measurement_unit // "Stuks", "Paar", or "Sets"
+            'netContent' => intval($net_content),
+            'measurementUnit' => $measurement_unit
         ];
         
-        // Add optional fields
-        if ($assignment->gpc_code && !empty($assignment->gpc_code)) {
+        GS1_GTIN_Logger::log("Base data built", 'debug', $data);
+        
+        // Add optional GPC
+        if (!empty($assignment->gpc_code)) {
             $data['gpc'] = $assignment->gpc_code;
+            GS1_GTIN_Logger::log("GPC code added: {$assignment->gpc_code}", 'debug');
+        } else {
+            GS1_GTIN_Logger::log("No GPC code in assignment", 'debug');
         }
         
+        // Add optional image
         if ($image_url) {
             $data['imageUrl'] = $image_url;
+            GS1_GTIN_Logger::log("Image URL added", 'debug');
         }
         
+        GS1_GTIN_Logger::log("=== PREPARE REGISTRATION DATA SUCCESS ===", 'info', $data);
+        
         return $data;
+        
+    } catch (Exception $e) {
+        GS1_GTIN_Logger::log("=== PREPARE REGISTRATION DATA EXCEPTION ===", 'error', [
+            'product_id' => $product_id,
+            'message' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'trace' => $e->getTraceAsString()
+        ]);
+        return false;
     }
+}
     
     /**
      * Register products with GS1
@@ -315,7 +386,7 @@ class GS1_GTIN_Manager {
             if ($assignment && !$assignment->external_registration) {
                 GS1_GTIN_Database::save_gtin_assignment([
                     'product_id' => $product_id,
-                    'gtin' => $assignment->gtin,
+                    'gtin' => GS1_GTIN_Helpers::add_checkdigit($assignment->gtin),
                     'contract_number' => $assignment->contract_number,
                     'status' => 'pending_registration',
                     'invocation_id' => $invocation_id

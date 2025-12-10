@@ -280,40 +280,104 @@ class GS1_GTIN_Admin {
     }
     
     public function ajax_get_registration_data() {
+    GS1_GTIN_Logger::log('=== AJAX GET REGISTRATION DATA START ===', 'debug');
+    
+    try {
         check_ajax_referer('gs1_gtin_nonce', 'nonce');
         
         $product_ids = isset($_POST['product_ids']) ? array_map('intval', $_POST['product_ids']) : [];
         
+        GS1_GTIN_Logger::log('Product IDs received', 'debug', ['product_ids' => $product_ids]);
+        
         if (empty($product_ids)) {
+            GS1_GTIN_Logger::log('No product IDs provided', 'error');
             wp_send_json_error(['message' => 'Geen producten geselecteerd']);
         }
         
         $products_data = [];
         
         foreach ($product_ids as $product_id) {
-            $product = wc_get_product($product_id);
-            $assignment = GS1_GTIN_Database::get_gtin_assignment($product_id);
+            GS1_GTIN_Logger::log("Processing product {$product_id}", 'debug');
             
-            if (!$product || !$assignment || $assignment->external_registration) {
-                continue;
-            }
-            
-            $product_data = GS1_GTIN_Manager::prepare_registration_data($product_id);
-            
-            if ($product_data) {
+            try {
+                $product = wc_get_product($product_id);
+                if (!$product) {
+                    GS1_GTIN_Logger::log("Product {$product_id} not found", 'warning');
+                    continue;
+                }
+                
+                GS1_GTIN_Logger::log("Product {$product_id} loaded: {$product->get_name()}", 'debug');
+                
+                $assignment = GS1_GTIN_Database::get_gtin_assignment($product_id);
+                
+                if (!$assignment) {
+                    GS1_GTIN_Logger::log("Product {$product_id} has no GTIN assignment", 'warning');
+                    continue;
+                }
+                
+                GS1_GTIN_Logger::log("Product {$product_id} assignment found", 'debug', [
+                    'gtin' => $assignment->gtin,
+                    'status' => $assignment->status,
+                    'external' => $assignment->external_registration
+                ]);
+                
+                if ($assignment->external_registration) {
+                    GS1_GTIN_Logger::log("Product {$product_id} is external registration, skipping", 'info');
+                    continue;
+                }
+                
+                GS1_GTIN_Logger::log("Preparing registration data for product {$product_id}", 'debug');
+                
+                $product_data = GS1_GTIN_Manager::prepare_registration_data($product_id);
+                
+                if (!$product_data) {
+                    GS1_GTIN_Logger::log("Failed to prepare registration data for product {$product_id}", 'error');
+                    continue;
+                }
+                
+                GS1_GTIN_Logger::log("Registration data prepared for product {$product_id}", 'debug', $product_data);
+                
                 $products_data[] = [
                     'product_id' => $product_id,
                     'product_name' => $product->get_name(),
                     'sku' => $product->get_sku(),
                     'data' => $product_data
                 ];
+                
+                GS1_GTIN_Logger::log("Product {$product_id} added to registration batch", 'info');
+                
+            } catch (Exception $e) {
+                GS1_GTIN_Logger::log("EXCEPTION processing product {$product_id}", 'error', [
+                    'message' => $e->getMessage(),
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+                continue;
             }
         }
         
+        GS1_GTIN_Logger::log("Registration data preparation complete", 'info', [
+            'total_products' => count($products_data)
+        ]);
+        
         wp_send_json_success(['products' => $products_data]);
+        
+    } catch (Exception $e) {
+        GS1_GTIN_Logger::log("FATAL EXCEPTION in ajax_get_registration_data", 'error', [
+            'message' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'trace' => $e->getTraceAsString()
+        ]);
+        
+        wp_send_json_error(['message' => 'Server error: ' . $e->getMessage()]);
     }
     
-    public function ajax_submit_registration() {
+    GS1_GTIN_Logger::log('=== AJAX GET REGISTRATION DATA END ===', 'debug');
+}
+    
+public function ajax_submit_registration() {
         check_ajax_referer('gs1_gtin_nonce', 'nonce');
         
         $products_data = isset($_POST['products_data']) ? $_POST['products_data'] : [];

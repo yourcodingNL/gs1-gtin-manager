@@ -423,8 +423,8 @@
                             <div class="gs1-form-group">
                                 <label>Consumenteneenheid</label>
                                 <select data-index="${index}" data-field="consumerUnit">
-                                    <option value="true" ${product.data.consumerUnit === 'true' ? 'selected' : ''}>Ja</option>
-                                    <option value="false" ${product.data.consumerUnit === 'false' ? 'selected' : ''}>Nee</option>
+                                    <option value="Ja" ${product.data.consumerUnit === 'Ja' ? 'selected' : ''}>Ja</option>
+<option value="Nee" ${product.data.consumerUnit === 'Nee' ? 'selected' : ''}>Nee</option>
                                 </select>
                             </div>
                         </div>
@@ -485,9 +485,16 @@
         },
         
         submitRegistration: function() {
-            this.showRegistrationStep(3);
-            
-            $.ajax({
+    this.showRegistrationStep(3);
+    
+    // Force consumerUnit to 'Ja'
+    this.registrationData.forEach(item => {
+        if (item.data) {
+            item.data.consumerUnit = 'Ja';
+        }
+    });
+    
+    $.ajax({
                 url: gs1GtinAdmin.ajaxUrl,
                 type: 'POST',
                 data: {
