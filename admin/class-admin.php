@@ -19,11 +19,13 @@ class GS1_GTIN_Admin {
         add_action('admin_enqueue_scripts', [$this, 'enqueue_scripts']);
         add_action('wp_ajax_gs1_search_products', [$this, 'ajax_search_products']);
         add_action('wp_ajax_gs1_assign_gtins', [$this, 'ajax_assign_gtins']);
+        add_action('wp_ajax_gs1_unassign_gtins', [$this, 'ajax_unassign_gtins']);
         add_action('wp_ajax_gs1_get_registration_data', [$this, 'ajax_get_registration_data']);
         add_action('wp_ajax_gs1_submit_registration', [$this, 'ajax_submit_registration']);
         add_action('wp_ajax_gs1_sync_ranges', [$this, 'ajax_sync_ranges']);
         add_action('wp_ajax_gs1_test_connection', [$this, 'ajax_test_connection']);
         add_action('wp_ajax_gs1_get_log', [$this, 'ajax_get_log']);
+        add_action('wp_ajax_gs1_clear_log', [$this, 'ajax_clear_log']);
     }
     
     public function add_menu_pages() {
@@ -53,7 +55,7 @@ class GS1_GTIN_Admin {
             'gs1-gtin-admin',
             GS1_GTIN_PLUGIN_URL . 'admin/assets/js/admin.js',
             ['jquery'],
-            GS1_GTIN_VERSION,
+            '999.0.0',
             true
         );
         
@@ -153,50 +155,84 @@ class GS1_GTIN_Admin {
         
         $search = isset($_POST['search']) ? sanitize_text_field($_POST['search']) : '';
         $brand = isset($_POST['brand']) ? sanitize_text_field($_POST['brand']) : '';
-        $status = isset($_POST['status']) ? sanitize_text_field($_POST['status']) : '';
+        $status_filter = isset($_POST['status']) ? sanitize_text_field($_POST['status']) : '';
         $page = isset($_POST['page']) ? intval($_POST['page']) : 1;
         $per_page = 50;
         
+        // WooCommerce producten ophalen
         $args = [
-            'search' => $search,
-            'brand' => $brand,
-            'status' => $status,
-            'limit' => $per_page,
-            'offset' => ($page - 1) * $per_page
+            'post_type' => 'product',
+            'post_status' => 'publish',
+            'posts_per_page' => $per_page,
+            'paged' => $page,
+            'orderby' => 'date',
+            'order' => 'DESC'
         ];
         
-        $assignments = GS1_GTIN_Database::get_gtin_assignments($args);
-        $total = GS1_GTIN_Database::count_gtin_assignments($args);
+        if (!empty($search)) {
+            $args['s'] = $search;
+        }
+        
+        $query = new WP_Query($args);
         
         $results = [];
-        foreach ($assignments as $assignment) {
-            $product = wc_get_product($assignment->product_id);
-            if (!$product) {
+        foreach ($query->posts as $post) {
+            $product = wc_get_product($post->ID);
+            if (!$product) continue;
+            
+            $assignment = GS1_GTIN_Database::get_gtin_assignment($post->ID);
+            
+            $ean = get_post_meta($post->ID, 'ean_13', true);
+            $brand_attr = $product->get_attribute('pa_brand');
+            
+            // Bepaal correcte status
+            if (!$assignment) {
+                // Geen assignment = geen GTIN
+                $status = 'no_gtin';
+                $gtin = '-';
+                $external = false;
+                $error_message = '';
+            } else {
+                // Wel assignment = heeft GTIN
+                $status = $assignment->status;
+                $gtin = $assignment->gtin;
+                $external = $assignment->external_registration;
+                $error_message = $assignment->error_message;
+            }
+            
+            // Status filter
+            if (!empty($status_filter)) {
+                if ($status_filter === 'pending' && $status !== 'pending') {
+                    continue; // Alleen pending (= heeft GTIN, niet geregistreerd)
+                }
+                if ($status_filter !== 'pending' && $status_filter !== $status) {
+                    continue;
+                }
+            }
+            
+            // Brand filter
+            if (!empty($brand) && $brand_attr !== $brand) {
                 continue;
             }
             
-            $ean = get_post_meta($assignment->product_id, 'ean_13', true);
-            $brand_attr = $product->get_attribute('pa_brand');
-            
             $results[] = [
-                'id' => $assignment->id,
-                'product_id' => $assignment->product_id,
+                'product_id' => $post->ID,
                 'product_name' => $product->get_name(),
                 'sku' => $product->get_sku(),
                 'ean' => $ean,
-                'gtin' => $assignment->gtin,
-                'status' => $assignment->status,
+                'gtin' => $gtin,
+                'status' => $status,
                 'brand' => $brand_attr,
-                'external' => $assignment->external_registration,
-                'error_message' => $assignment->error_message
+                'external' => $external,
+                'error_message' => $error_message
             ];
         }
         
         wp_send_json_success([
             'products' => $results,
-            'total' => $total,
+            'total' => $query->found_posts,
             'page' => $page,
-            'total_pages' => ceil($total / $per_page)
+            'total_pages' => $query->max_num_pages
         ]);
     }
     
@@ -213,6 +249,33 @@ class GS1_GTIN_Admin {
         $results = GS1_GTIN_Manager::assign_gtins_bulk($product_ids);
         
         wp_send_json_success($results);
+    }
+    
+    public function ajax_unassign_gtins() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        $product_ids = isset($_POST['product_ids']) ? array_map('intval', $_POST['product_ids']) : [];
+        
+        if (empty($product_ids)) {
+            wp_send_json_error(['message' => 'Geen producten geselecteerd']);
+        }
+        
+        global $wpdb;
+        $table = $wpdb->prefix . 'gs1_gtin_assignments';
+        $deleted = 0;
+        
+        foreach ($product_ids as $product_id) {
+            $result = $wpdb->delete($table, ['product_id' => $product_id], ['%d']);
+            if ($result) {
+                $deleted++;
+                GS1_GTIN_Logger::log("GTIN assignment deleted for product {$product_id}", 'info');
+            }
+        }
+        
+        wp_send_json_success([
+            'deleted' => $deleted,
+            'message' => "{$deleted} GTIN(s) verwijderd"
+        ]);
     }
     
     public function ajax_get_registration_data() {
@@ -318,6 +381,29 @@ class GS1_GTIN_Admin {
         }
         
         wp_send_json_success(['content' => $content]);
+    }
+    
+    public function ajax_clear_log() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        $filename = isset($_POST['filename']) ? sanitize_file_name($_POST['filename']) : '';
+        
+        if (empty($filename)) {
+            wp_send_json_error(['message' => 'Geen bestandsnaam opgegeven']);
+        }
+        
+        $log_dir = wp_upload_dir()['basedir'] . '/gs1-gtin-logs/';
+        $file_path = $log_dir . $filename;
+        
+        if (!file_exists($file_path)) {
+            wp_send_json_error(['message' => 'Bestand niet gevonden']);
+        }
+        
+        file_put_contents($file_path, '');
+        
+        GS1_GTIN_Logger::log('Log file cleared: ' . $filename, 'info');
+        
+        wp_send_json_success(['message' => 'Log geleegd']);
     }
 }
 

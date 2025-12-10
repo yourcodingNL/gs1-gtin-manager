@@ -2,7 +2,7 @@
 /**
  * Settings Class
  * 
- * Handles plugin settings
+ * Handles plugin settings with OAuth2
  * 
  * @package GS1_GTIN_Manager
  * @author YoCo - Sebastiaan Kalkman
@@ -23,8 +23,10 @@ class GS1_GTIN_Settings {
     public function register_settings() {
         // API Settings
         register_setting('gs1_gtin_settings', 'gs1_gtin_api_mode');
-        register_setting('gs1_gtin_settings', 'gs1_gtin_api_token_sandbox');
-        register_setting('gs1_gtin_settings', 'gs1_gtin_api_token_live');
+        register_setting('gs1_gtin_settings', 'gs1_gtin_client_id_sandbox');
+        register_setting('gs1_gtin_settings', 'gs1_gtin_client_secret_sandbox');
+        register_setting('gs1_gtin_settings', 'gs1_gtin_client_id_live');
+        register_setting('gs1_gtin_settings', 'gs1_gtin_client_secret_live');
         register_setting('gs1_gtin_settings', 'gs1_gtin_account_number');
         register_setting('gs1_gtin_settings', 'gs1_gtin_default_contract');
         register_setting('gs1_gtin_settings', 'gs1_gtin_log_retention_days');
@@ -38,8 +40,10 @@ class GS1_GTIN_Settings {
         }
         
         $api_mode = get_option('gs1_gtin_api_mode', 'sandbox');
-        $api_token_sandbox = get_option('gs1_gtin_api_token_sandbox', '');
-        $api_token_live = get_option('gs1_gtin_api_token_live', '');
+        $client_id_sandbox = get_option('gs1_gtin_client_id_sandbox', '');
+        $client_secret_sandbox = get_option('gs1_gtin_client_secret_sandbox', '');
+        $client_id_live = get_option('gs1_gtin_client_id_live', '');
+        $client_secret_live = get_option('gs1_gtin_client_secret_live', '');
         $account_number = get_option('gs1_gtin_account_number', '');
         $default_contract = get_option('gs1_gtin_default_contract', '');
         $log_retention_days = get_option('gs1_gtin_log_retention_days', 30);
@@ -67,22 +71,42 @@ class GS1_GTIN_Settings {
                 </tr>
                 
                 <tr>
-                    <th scope="row">API Token (Sandbox)</th>
+                    <th scope="row">Client ID (Sandbox)</th>
                     <td>
-                        <input type="text" name="gs1_gtin_api_token_sandbox" 
-                               value="<?php echo esc_attr($api_token_sandbox); ?>" 
-                               class="regular-text" placeholder="Bearer token voor sandbox">
-                        <p class="description">API token voor test omgeving</p>
+                        <input type="text" name="gs1_gtin_client_id_sandbox" 
+                               value="<?php echo esc_attr($client_id_sandbox); ?>" 
+                               class="regular-text" placeholder="a1278096-144a-4ab0-88ed-a1901ce3ad4e">
+                        <p class="description">Client ID voor sandbox omgeving</p>
                     </td>
                 </tr>
                 
                 <tr>
-                    <th scope="row">API Token (Live)</th>
+                    <th scope="row">Client Secret (Sandbox)</th>
                     <td>
-                        <input type="text" name="gs1_gtin_api_token_live" 
-                               value="<?php echo esc_attr($api_token_live); ?>" 
-                               class="regular-text" placeholder="Bearer token voor live">
-                        <p class="description">API token voor productie omgeving</p>
+                        <input type="password" name="gs1_gtin_client_secret_sandbox" 
+                               value="<?php echo esc_attr($client_secret_sandbox); ?>" 
+                               class="regular-text" placeholder="PaJ*****">
+                        <p class="description">Client Secret voor sandbox omgeving</p>
+                    </td>
+                </tr>
+                
+                <tr>
+                    <th scope="row">Client ID (Live)</th>
+                    <td>
+                        <input type="text" name="gs1_gtin_client_id_live" 
+                               value="<?php echo esc_attr($client_id_live); ?>" 
+                               class="regular-text" placeholder="33cbff7d-dbdf-4eae-927b-ae4fa5ce2fe2">
+                        <p class="description">Client ID voor productie omgeving</p>
+                    </td>
+                </tr>
+                
+                <tr>
+                    <th scope="row">Client Secret (Live)</th>
+                    <td>
+                        <input type="password" name="gs1_gtin_client_secret_live" 
+                               value="<?php echo esc_attr($client_secret_live); ?>" 
+                               class="regular-text" placeholder="5gW*****">
+                        <p class="description">Client Secret voor productie omgeving</p>
                     </td>
                 </tr>
                 
@@ -218,12 +242,18 @@ class GS1_GTIN_Settings {
     
     private function save_settings() {
         update_option('gs1_gtin_api_mode', sanitize_text_field($_POST['gs1_gtin_api_mode'] ?? 'sandbox'));
-        update_option('gs1_gtin_api_token_sandbox', sanitize_text_field($_POST['gs1_gtin_api_token_sandbox'] ?? ''));
-        update_option('gs1_gtin_api_token_live', sanitize_text_field($_POST['gs1_gtin_api_token_live'] ?? ''));
+        update_option('gs1_gtin_client_id_sandbox', sanitize_text_field($_POST['gs1_gtin_client_id_sandbox'] ?? ''));
+        update_option('gs1_gtin_client_secret_sandbox', sanitize_text_field($_POST['gs1_gtin_client_secret_sandbox'] ?? ''));
+        update_option('gs1_gtin_client_id_live', sanitize_text_field($_POST['gs1_gtin_client_id_live'] ?? ''));
+        update_option('gs1_gtin_client_secret_live', sanitize_text_field($_POST['gs1_gtin_client_secret_live'] ?? ''));
         update_option('gs1_gtin_account_number', sanitize_text_field($_POST['gs1_gtin_account_number'] ?? ''));
         update_option('gs1_gtin_default_contract', sanitize_text_field($_POST['gs1_gtin_default_contract'] ?? ''));
         update_option('gs1_gtin_log_retention_days', intval($_POST['gs1_gtin_log_retention_days'] ?? 30));
         update_option('gs1_gtin_auto_sync_ean', isset($_POST['gs1_gtin_auto_sync_ean']) ? 'yes' : 'no');
+        
+        // Clear cached tokens when settings change
+        delete_transient('gs1_access_token_sandbox');
+        delete_transient('gs1_access_token_live');
         
         GS1_GTIN_Logger::log('Settings saved', 'info');
     }

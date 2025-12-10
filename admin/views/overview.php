@@ -98,6 +98,9 @@ $brands = get_terms([
         <button type="button" id="gs1-assign-selected" class="button button-primary" disabled>
             GTIN Toewijzen aan Geselecteerde
         </button>
+        <button type="button" id="gs1-unassign-selected" class="button" disabled>
+            ❌ GTIN Verwijderen
+        </button>
         <button type="button" id="gs1-register-selected" class="button button-primary" disabled>
             Registreren bij GS1
         </button>

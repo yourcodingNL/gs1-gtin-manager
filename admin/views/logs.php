@@ -51,7 +51,11 @@ $log_files = GS1_GTIN_Logger::get_log_files();
         <div class="gs1-log-viewer" style="display:none;">
             <h3>
                 <span id="gs1-current-log-name"></span>
-                <button type="button" class="button" id="gs1-close-log">Sluiten</button>
+                <div style="float:right;">
+                    <button type="button" class="button" id="gs1-copy-log">📋 Kopieer</button>
+                    <button type="button" class="button" id="gs1-clear-log">🗑️ Leeg</button>
+                    <button type="button" class="button" id="gs1-close-log">✕ Sluiten</button>
+                </div>
             </h3>
             <div class="gs1-log-content">
                 <pre id="gs1-log-content-pre"></pre>

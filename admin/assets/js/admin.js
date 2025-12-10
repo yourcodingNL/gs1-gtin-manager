@@ -33,6 +33,7 @@
             $(document).on('click', '#gs1-select-all', (e) => this.selectAll(e));
             $(document).on('change', '.gs1-product-checkbox', () => this.updateSelection());
             $(document).on('click', '#gs1-assign-selected', () => this.assignGtins());
+            $(document).on('click', '#gs1-unassign-selected', () => this.unassignGtins());
             $(document).on('click', '#gs1-register-selected', () => this.startRegistration());
             $(document).on('click', '#gs1-mark-external', () => this.markExternal());
             $(document).on('click', '#gs1-prev-page', () => this.changePage(-1));
@@ -72,12 +73,44 @@
             $(document).on('click', '#gs1-close-log', () => {
                 $('.gs1-log-viewer').hide();
             });
+            $(document).on('click', '#gs1-copy-log', () => {
+                const logText = $('#gs1-log-content-pre').text();
+                navigator.clipboard.writeText(logText).then(() => {
+                    alert('Log gekopieerd naar klembord!');
+                });
+            });
+            $(document).on('click', '#gs1-clear-log', () => {
+                if (!confirm('Weet je zeker dat je deze log wilt legen?')) return;
+                
+                const filename = $('#gs1-current-log-name').text();
+                $.ajax({
+                    url: gs1GtinAdmin.ajaxUrl,
+                    type: 'POST',
+                    data: {
+                        action: 'gs1_clear_log',
+                        nonce: gs1GtinAdmin.nonce,
+                        filename: filename
+                    },
+                    success: (response) => {
+                        if (response.success) {
+                            $('#gs1-log-content-pre').text('');
+                            alert('Log geleegd!');
+                        }
+                    }
+                });
+            });
             $(document).on('change', '#gs1-log-level-filter', (e) => {
                 this.filterLogs($(e.target).val());
             });
             $(document).on('click', '.gs1-view-log-context', (e) => {
                 const context = $(e.target).data('context');
-                this.viewLogContext(context);
+                $('#gs1-log-context-modal').show();
+                try {
+                    const parsed = JSON.parse(context);
+                    $('#gs1-log-context-content').text(JSON.stringify(parsed, null, 2));
+                } catch(e) {
+                    $('#gs1-log-context-content').text(context);
+                }
             });
             $(document).on('click', '#gs1-close-context-modal', () => {
                 $('#gs1-log-context-modal').hide();
@@ -198,7 +231,7 @@
             });
             
             const hasSelection = this.selectedProducts.length > 0;
-            $('#gs1-assign-selected, #gs1-register-selected, #gs1-mark-external').prop('disabled', !hasSelection);
+            $('#gs1-assign-selected, #gs1-unassign-selected, #gs1-register-selected, #gs1-mark-external').prop('disabled', !hasSelection);
         },
         
         changePage: function(direction) {
@@ -225,6 +258,30 @@
                     if (response.success) {
                         const result = response.data;
                         this.showSuccess(`${result.success.length} GTINs toegewezen. ${result.errors.length} fouten.`);
+                        this.loadProducts();
+                    } else {
+                        this.showError(response.data.message);
+                    }
+                }
+            });
+        },
+        
+        unassignGtins: function() {
+            if (this.selectedProducts.length === 0) return;
+            
+            if (!confirm(`GTIN verwijderen van ${this.selectedProducts.length} producten?\n\nLET OP: Dit werkt alleen voor producten die nog NIET bij GS1 zijn geregistreerd!`)) return;
+            
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_unassign_gtins',
+                    nonce: gs1GtinAdmin.nonce,
+                    product_ids: this.selectedProducts
+                },
+                success: (response) => {
+                    if (response.success) {
+                        this.showSuccess(response.data.message);
                         this.loadProducts();
                     } else {
                         this.showError(response.data.message);

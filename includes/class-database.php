@@ -118,6 +118,35 @@ class GS1_GTIN_Database {
     }
     
     /**
+     * Get GTIN assignment by GTIN
+     */
+    public static function get_gtin_assignment_by_gtin($gtin) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'gs1_gtin_assignments';
+        
+        return $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$table} WHERE gtin = %s",
+            $gtin
+        ));
+    }
+    
+    /**
+     * Mark GTIN as externally registered
+     */
+    public static function mark_gtin_as_external($gtin, $data = []) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'gs1_gtin_assignments';
+        
+        $wpdb->insert($table, [
+            'product_id' => 0,
+            'gtin' => $gtin,
+            'status' => 'registered',
+            'external_registration' => 1,
+            'contract_number' => $data['contract_number'] ?? null
+        ]);
+    }
+    
+    /**
      * Get all GTIN assignments with filters
      */
     public static function get_gtin_assignments($args = []) {
@@ -287,6 +316,18 @@ class GS1_GTIN_Database {
         }
         
         return $wpdb->get_results("SELECT * FROM {$table} ORDER BY contract_number, start_number");
+    }
+    
+    /**
+     * Delete all GTIN ranges
+     */
+    public static function delete_all_gtin_ranges() {
+        global $wpdb;
+        $table = $wpdb->prefix . 'gs1_gtin_ranges';
+        
+        $wpdb->query("TRUNCATE TABLE {$table}");
+        
+        GS1_GTIN_Logger::log('All GTIN ranges deleted', 'info');
     }
     
     /**

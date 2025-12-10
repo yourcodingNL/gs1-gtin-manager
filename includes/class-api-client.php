@@ -14,31 +14,94 @@ if (!defined('ABSPATH')) {
 
 class GS1_GTIN_API_Client {
     
-    private $api_token;
+    private $client_id;
+    private $client_secret;
     private $account_number;
     private $api_mode;
     private $base_url;
     
     public function __construct() {
         $this->api_mode = get_option('gs1_gtin_api_mode', 'sandbox');
-        $this->api_token = $this->api_mode === 'live' 
-            ? get_option('gs1_gtin_api_token_live') 
-            : get_option('gs1_gtin_api_token_sandbox');
-        $this->account_number = get_option('gs1_gtin_account_number');
         
-        $this->base_url = $this->api_mode === 'live'
-            ? 'https://gs1nl-api.gs1.nl/basic-product-data-in'
-            : 'https://gs1nl-api-acc.gs1.nl/basic-product-data-in';
+        if ($this->api_mode === 'live') {
+            $this->client_id = get_option('gs1_gtin_client_id_live');
+            $this->client_secret = get_option('gs1_gtin_client_secret_live');
+            $this->base_url = 'https://gs1nl-api.gs1.nl/basic-product-data-in';
+        } else {
+            $this->client_id = get_option('gs1_gtin_client_id_sandbox');
+            $this->client_secret = get_option('gs1_gtin_client_secret_sandbox');
+            $this->base_url = 'https://gs1nl-api-acc.gs1.nl/basic-product-data-in';
+        }
+        
+        $this->account_number = get_option('gs1_gtin_account_number');
+    }
+    
+    /**
+     * Get OAuth2 access token
+     */
+    private function get_access_token() {
+        // Check cached token
+        $cache_key = 'gs1_access_token_' . $this->api_mode;
+        $cached = get_transient($cache_key);
+        
+        if ($cached) {
+            return $cached;
+        }
+        
+        $token_url = $this->api_mode === 'live' 
+            ? 'https://gs1nl-api.gs1.nl/authorization/token'
+            : 'https://gs1nl-api-acc.gs1.nl/authorization/token';
+        
+        // Request new token - CLIENT ID/SECRET IN HEADERS!
+        $response = wp_remote_post($token_url, [
+            'headers' => [
+                'client_id' => $this->client_id,
+                'client_secret' => $this->client_secret
+            ],
+            'timeout' => 30
+        ]);
+        
+        if (is_wp_error($response)) {
+            GS1_GTIN_Logger::log('OAuth token request failed: ' . $response->get_error_message(), 'error');
+            return false;
+        }
+        
+        $body = json_decode(wp_remote_retrieve_body($response), true);
+        
+        if (empty($body['access_token'])) {
+            GS1_GTIN_Logger::log('No access token in OAuth response', 'error', $body);
+            return false;
+        }
+        
+        $token = $body['access_token'];
+        $expires_in = isset($body['expires_in']) ? intval($body['expires_in']) - 60 : 3540;
+        
+        // Cache token
+        set_transient($cache_key, $token, $expires_in);
+        
+        GS1_GTIN_Logger::log('OAuth token obtained successfully', 'info');
+        
+        return $token;
     }
     
     /**
      * Make API request
      */
     private function request($endpoint, $method = 'GET', $data = null) {
+        // Get access token
+        $access_token = $this->get_access_token();
+        
+        if (!$access_token) {
+            return [
+                'success' => false,
+                'error' => 'Could not obtain access token'
+            ];
+        }
+        
         $url = $this->base_url . $endpoint;
         
         $headers = [
-            'Authorization' => 'Bearer ' . $this->api_token,
+            'Authorization' => 'Bearer ' . $access_token,
             'Content-Type' => 'application/json',
             'Accept' => 'application/json'
         ];
@@ -150,6 +213,9 @@ class GS1_GTIN_API_Client {
      * Sync GTIN ranges from API
      */
     public function sync_gtin_ranges() {
+        // Wis ALLE oude ranges voor verse start
+        GS1_GTIN_Database::delete_all_gtin_ranges();
+        
         $result = $this->get_gtin_code_ranges();
         
         if (!$result['success']) {
@@ -178,11 +244,69 @@ class GS1_GTIN_API_Client {
             $synced++;
         }
         
+        // Sync existing GTINs from GS1
+        $this->sync_existing_gtins_from_gs1();
+        
         GS1_GTIN_Logger::log("Synced {$synced} GTIN ranges from API", 'info');
         
         return [
             'success' => true,
             'synced' => $synced
         ];
+    }
+    
+    /**
+     * Sync existing GTINs that are already registered at GS1
+     */
+    private function sync_existing_gtins_from_gs1() {
+        // Check registration status to get last invocation
+        $status_result = $this->get_registration_status();
+        
+        if (!$status_result['success'] || empty($status_result['data'])) {
+            GS1_GTIN_Logger::log('No previous registrations found at GS1', 'info');
+            return;
+        }
+        
+        // Get all registration results (pagination may be needed for large datasets)
+        // For now, we'll get the most recent batch
+        $invocation_id = $status_result['data']['Item1'] ?? null;
+        
+        if (!$invocation_id) {
+            return;
+        }
+        
+        $results = $this->get_registration_results($invocation_id);
+        
+        if (!$results['success']) {
+            return;
+        }
+        
+        $existing_gtins = 0;
+        
+        if (!empty($results['data']['successfulProducts'])) {
+            foreach ($results['data']['successfulProducts'] as $product) {
+                if (empty($product['gtin'])) {
+                    continue;
+                }
+                
+                // Check if GTIN already exists in our database
+                $existing = GS1_GTIN_Database::get_gtin_assignment_by_gtin($product['gtin']);
+                
+                if (!$existing) {
+                    // Mark GTIN as used (external registration)
+                    GS1_GTIN_Database::mark_gtin_as_external($product['gtin'], [
+                        'contract_number' => $product['contractNumber'] ?? null,
+                        'description' => $product['description'] ?? null,
+                        'brand' => $product['brandName'] ?? null
+                    ]);
+                    
+                    $existing_gtins++;
+                }
+            }
+        }
+        
+        if ($existing_gtins > 0) {
+            GS1_GTIN_Logger::log("Synced {$existing_gtins} existing GTINs from GS1", 'info');
+        }
     }
 }
