@@ -1,6 +1,6 @@
 <?php
 /**
- * GS1 API Client
+ * GS1 API Client - FIXED for GS1 API requirements
  * 
  * Handles all communication with GS1 Nederland API
  * 
@@ -122,22 +122,20 @@ class GS1_GTIN_API_Client {
         }
         
         GS1_GTIN_Logger::log("API Request: {$method} {$endpoint}", 'debug', [
-    'url' => $url,
-    'data' => $data
-]);
+            'url' => $url,
+            'data' => $data
+        ]);
 
-// LOG EXACTE JSON DIE NAAR GS1 GAAT
-if ($data && in_array($method, ['POST', 'PUT', 'PATCH'])) {
-    $json_body = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
-    GS1_GTIN_Logger::log("=== EXACTE JSON NAAR GS1 API ===", 'info', [
-        'endpoint' => $endpoint,
-        'json_body' => $json_body,
-        'json_length' => strlen($json_body)
-    ]);
-}
+        // LOG EXACTE JSON DIE NAAR GS1 GAAT
+        if ($data && in_array($method, ['POST', 'PUT', 'PATCH'])) {
+            $json_body = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+            GS1_GTIN_Logger::log("=== EXACTE JSON NAAR GS1 API ===", 'info', [
+                'endpoint' => $endpoint,
+                'json_body' => $json_body,
+                'json_length' => strlen($json_body)
+            ]);
+        }
 
-$response = wp_remote_request($url, $args);
-        
         $response = wp_remote_request($url, $args);
         
         if (is_wp_error($response)) {
@@ -201,11 +199,12 @@ $response = wp_remote_request($url, $args);
     
     /**
      * Register GTIN products in bulk
+     * FIXED: Use PascalCase wrapper key 'RegistrationProducts'
      */
     public function register_gtin_products($products) {
         $data = [
-            'registrationProducts' => $products,
-            'accountNumber' => $this->account_number
+            'RegistrationProducts' => $products, // FIXED: PascalCase!
+            'AccountNumber' => $this->account_number
         ];
         
         return $this->request('/RegistrateGtinProducts', 'POST', $data);

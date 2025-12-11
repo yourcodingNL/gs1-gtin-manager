@@ -27,6 +27,9 @@ class GS1_GTIN_Admin {
         add_action('wp_ajax_gs1_get_log', [$this, 'ajax_get_log']);
         add_action('wp_ajax_gs1_clear_log', [$this, 'ajax_clear_log']);
         add_action('wp_ajax_gs1_delete_log', [$this, 'ajax_delete_log']);
+        add_action('wp_ajax_gs1_reset_last_used', [$this, 'ajax_reset_last_used']);
+        add_action('wp_ajax_gs1_set_last_used', [$this, 'ajax_set_last_used']);
+        add_action('wp_ajax_gs1_check_registration', [$this, 'ajax_check_registration']);
     }
     
     public function add_menu_pages() {
@@ -500,6 +503,104 @@ public function ajax_submit_registration() {
         GS1_GTIN_Logger::log('Log file deleted: ' . $filename, 'info');
         
         wp_send_json_success(['message' => 'Log bestand verwijderd']);
+}
+    
+    public function ajax_reset_last_used() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        $contract_number = isset($_POST['contract_number']) ? sanitize_text_field($_POST['contract_number']) : '';
+        
+        if (empty($contract_number)) {
+            wp_send_json_error(['message' => 'Geen contract nummer opgegeven']);
+        }
+        
+        global $wpdb;
+        $table = $wpdb->prefix . 'gs1_gtin_ranges';
+        
+        $updated = $wpdb->update(
+            $table,
+            ['last_used' => null],
+            ['contract_number' => $contract_number],
+            ['%s'],
+            ['%s']
+        );
+        
+        if ($updated !== false) {
+            GS1_GTIN_Logger::log("Last used reset voor contract {$contract_number}", 'info');
+            wp_send_json_success(['message' => 'Last used gereset']);
+        } else {
+            wp_send_json_error(['message' => 'Fout bij resetten']);
+        }
+    }
+    
+    public function ajax_set_last_used() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        $contract_number = isset($_POST['contract_number']) ? sanitize_text_field($_POST['contract_number']) : '';
+        $last_used = isset($_POST['last_used']) ? sanitize_text_field($_POST['last_used']) : '';
+        
+        if (empty($contract_number) || empty($last_used)) {
+            wp_send_json_error(['message' => 'Contract nummer en GTIN zijn verplicht']);
+        }
+        
+        if (strlen($last_used) !== 12 || !ctype_digit($last_used)) {
+            wp_send_json_error(['message' => 'GTIN moet 12 cijfers zijn']);
+        }
+        
+        global $wpdb;
+        $table = $wpdb->prefix . 'gs1_gtin_ranges';
+        
+        $range = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$table} WHERE contract_number = %s",
+            $contract_number
+        ));
+        
+        if (!$range) {
+            wp_send_json_error(['message' => 'Range niet gevonden']);
+        }
+        
+        $last_used_int = intval($last_used);
+        $start_int = intval($range->start_number);
+        $end_int = intval($range->end_number);
+        
+        if ($last_used_int < $start_int || $last_used_int > $end_int) {
+            wp_send_json_error(['message' => "GTIN moet tussen {$start_int} en {$end_int} liggen"]);
+        }
+        
+        $updated = $wpdb->update(
+            $table,
+            ['last_used' => $last_used],
+            ['contract_number' => $contract_number],
+            ['%s'],
+            ['%s']
+        );
+        
+        if ($updated !== false) {
+            GS1_GTIN_Logger::log("Last used ingesteld op {$last_used} voor contract {$contract_number}", 'info');
+            wp_send_json_success(['message' => 'Last used ingesteld']);
+        } else {
+            wp_send_json_error(['message' => 'Fout bij instellen']);
+        }
+    }
+    
+    public function ajax_check_registration() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        $invocation_id = isset($_POST['invocation_id']) ? sanitize_text_field($_POST['invocation_id']) : '';
+        
+        if (empty($invocation_id)) {
+            wp_send_json_error(['message' => 'Geen invocation ID opgegeven']);
+        }
+        
+        $invocation_id = trim($invocation_id, '"');
+        
+        $result = GS1_GTIN_Manager::check_registration_results($invocation_id);
+        
+        if ($result['success']) {
+            wp_send_json_success($result);
+        } else {
+            wp_send_json_error($result);
+        }
     }
 }
 

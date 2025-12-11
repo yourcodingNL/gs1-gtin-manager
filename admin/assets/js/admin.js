@@ -1,5 +1,5 @@
 /**
- * GS1 GTIN Manager - Admin JavaScript
+ * GS1 GTIN Manager - Admin JavaScript - FIXED UNASSIGN
  * 
  * @package GS1_GTIN_Manager
  * @author YoCo - Sebastiaan Kalkman
@@ -58,6 +58,7 @@
             $(document).on('click', '#gs1-select-all', (e) => this.selectAll(e));
             $(document).on('change', '.gs1-product-checkbox', () => this.updateSelection());
             $(document).on('click', '#gs1-assign-selected', () => this.assignGtins());
+            $(document).on('click', '#gs1-unassign-selected', () => this.unassignGtins()); // FIXED!
             $(document).on('click', '#gs1-register-selected', () => this.startRegistration());
             $(document).on('click', '#gs1-mark-external', () => this.markExternal());
             $(document).on('click', '#gs1-prev-page', () => this.changePage(-1));
@@ -75,6 +76,12 @@
             
             // Ranges tab
             $(document).on('click', '#gs1-sync-ranges', () => this.syncRanges());
+            $(document).on('click', '.gs1-reset-last-used', (e) => this.resetLastUsed(e));
+            $(document).on('click', '.gs1-set-last-used', (e) => this.openSetLastUsedModal(e));
+            $(document).on('click', '#gs1-confirm-set-last-used', () => this.confirmSetLastUsed());
+            $(document).on('click', '#gs1-cancel-set-last-used, #gs1-set-last-used-modal .gs1-modal-close', () => {
+                $('#gs1-set-last-used-modal').hide();
+            });
             
             // Status tab
             $(document).on('click', '.gs1-check-registration', (e) => {
@@ -97,27 +104,24 @@
             $(document).on('click', '#gs1-close-log', () => {
                 $('.gs1-log-viewer').hide();
             });
+            $(document).on('click', '#gs1-copy-log', () => this.copyLog());
+            $(document).on('click', '#gs1-clear-log', () => this.clearLog());
+            $(document).on('click', '#gs1-delete-current-log', () => this.deleteCurrentLog());
+            $(document).on('click', '.gs1-delete-log', (e) => {
+                const filename = $(e.target).data('filename');
+                this.deleteLog(filename);
+            });
             $(document).on('change', '#gs1-log-level-filter', (e) => {
                 this.filterLogs($(e.target).val());
-            });
-            $(document).on('click', '.gs1-view-log-context', (e) => {
-                const context = $(e.target).data('context');
-                $('#gs1-log-context-modal').show();
-                try {
-                    const parsed = JSON.parse(context);
-                    $('#gs1-log-context-content').text(JSON.stringify(parsed, null, 2));
-                } catch(e) {
-                    $('#gs1-log-context-content').text(context);
-                }
-            });
-            $(document).on('click', '#gs1-close-context-modal', () => {
-                $('#gs1-log-context-modal').hide();
             });
             
             // Settings tab
             $(document).on('click', '.gs1-test-connection', () => this.testConnection());
             $(document).on('click', '.gs1-add-gpc-mapping', () => this.addGpcMapping());
             $(document).on('click', '.gs1-save-gpc-mapping', (e) => this.saveGpcMapping(e));
+            $(document).on('click', '.gs1-cancel-gpc-mapping', (e) => {
+                $(e.target).closest('tr').remove();
+            });
             $(document).on('click', '.gs1-delete-gpc-mapping', (e) => this.deleteGpcMapping(e));
         },
         
@@ -158,6 +162,7 @@
             data.products.forEach((product) => {
                 const statusClass = 'gs1-status-' + product.status;
                 const statusLabels = {
+                    'no_gtin': 'Geen GTIN',
                     'pending': 'Nog niet geregistreerd',
                     'pending_registration': 'In registratie',
                     'registered': 'Geregistreerd',
@@ -176,7 +181,8 @@
                     <th class="check-column">
                         <input type="checkbox" class="gs1-product-checkbox" 
                                value="${product.product_id}" 
-                               data-external="${product.external}">
+                               data-external="${product.external}"
+                               data-has-gtin="${product.gtin !== '-' ? '1' : '0'}">
                     </th>
                     <td>${product.product_id}</td>
                     <td><strong>${product.product_name}</strong></td>
@@ -230,12 +236,22 @@
         
         updateSelection: function() {
             this.selectedProducts = [];
+            let hasGtin = 0;
+            
             $('.gs1-product-checkbox:checked').each((i, el) => {
                 this.selectedProducts.push(parseInt($(el).val()));
+                if ($(el).data('has-gtin') === 1) {
+                    hasGtin++;
+                }
             });
             
             const hasSelection = this.selectedProducts.length > 0;
-            $('#gs1-assign-selected, #gs1-register-selected, #gs1-mark-external').prop('disabled', !hasSelection);
+            
+            // Enable/disable buttons based on selection
+            $('#gs1-assign-selected').prop('disabled', !hasSelection);
+            $('#gs1-unassign-selected').prop('disabled', hasGtin === 0); // Only enable if has GTIN!
+            $('#gs1-register-selected').prop('disabled', hasGtin === 0);
+            $('#gs1-mark-external').prop('disabled', !hasSelection);
         },
         
         changePage: function(direction) {
@@ -248,6 +264,9 @@
             if (this.selectedProducts.length === 0) return;
             
             if (!confirm(`GTIN toewijzen aan ${this.selectedProducts.length} producten?`)) return;
+            
+            const button = $('#gs1-assign-selected');
+            button.prop('disabled', true).text('Toewijzen...');
             
             $.ajax({
                 url: gs1GtinAdmin.ajaxUrl,
@@ -266,6 +285,43 @@
                     } else {
                         this.showError(response.data.message);
                     }
+                },
+                complete: () => {
+                    button.prop('disabled', false).text('GTIN Toewijzen aan Geselecteerde');
+                }
+            });
+        },
+        
+        // FIXED: Unassign GTINs
+        unassignGtins: function() {
+            if (this.selectedProducts.length === 0) return;
+            
+            if (!confirm(`Weet je zeker dat je ${this.selectedProducts.length} GTIN(s) wilt verwijderen? Dit kan NIET ongedaan worden gemaakt!`)) return;
+            
+            const button = $('#gs1-unassign-selected');
+            button.prop('disabled', true).text('Verwijderen...');
+            
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_unassign_gtins',
+                    nonce: gs1GtinAdmin.nonce,
+                    product_ids: this.selectedProducts
+                },
+                success: (response) => {
+                    if (response.success) {
+                        this.showSuccess(response.data.message || 'GTINs verwijderd');
+                        this.loadProducts();
+                    } else {
+                        this.showError(response.data.message || 'Fout bij verwijderen');
+                    }
+                },
+                error: () => {
+                    this.showError('Netwerkfout bij verwijderen');
+                },
+                complete: () => {
+                    button.prop('disabled', false).text('❌ GTIN Verwijderen');
                 }
             });
         },
@@ -334,10 +390,13 @@
         
         renderRegistrationStep1: function() {
             const html = this.registrationData.map((product) => {
+                // Show 13-digit GTIN if available
+                let gtinDisplay = product.data.Gtin || '-';
+                
                 return `
                     <div class="gs1-registration-product-item">
                         <strong>${product.product_name}</strong> (SKU: ${product.sku})<br>
-                        <small>GTIN: ${product.data.gtin} | Merk: ${product.data.brandName || '-'}</small>
+                        <small>GTIN: ${gtinDisplay} | Merk: ${product.data.BrandName || '-'}</small>
                     </div>
                 `;
             }).join('');
@@ -379,52 +438,53 @@
         
         renderRegistrationStep2: function() {
             const html = this.registrationData.map((product, index) => {
+                const data = product.data;
                 return `
                     <div class="gs1-registration-data-item">
                         <h4>${product.product_name}</h4>
                         
                         <div class="gs1-form-row">
                             <div class="gs1-form-group">
-                                <label>GTIN *</label>
-                                <input type="text" readonly value="${product.data.gtin}" class="regular-text">
+                                <label>GTIN (13 digits met checkdigit) *</label>
+                                <input type="text" readonly value="${data.Gtin || ''}" class="regular-text">
                             </div>
                             <div class="gs1-form-group">
                                 <label>Status *</label>
-                                <input type="text" value="${product.data.status}" class="regular-text" 
-                                       data-index="${index}" data-field="status">
+                                <input type="text" value="${data.Status || 'Actief'}" class="regular-text" 
+                                       data-index="${index}" data-field="Status">
                             </div>
                         </div>
                         
                         <div class="gs1-form-row">
                             <div class="gs1-form-group">
                                 <label>Merknaam</label>
-                                <input type="text" value="${product.data.brandName || ''}" class="regular-text" 
-                                       data-index="${index}" data-field="brandName">
+                                <input type="text" value="${data.BrandName || ''}" class="regular-text" 
+                                       data-index="${index}" data-field="BrandName">
                             </div>
                             <div class="gs1-form-group">
-                                <label>GPC Code</label>
-                                <input type="text" value="${product.data.gpc || ''}" class="regular-text" 
-                                       data-index="${index}" data-field="gpc" 
-                                       placeholder="Bijv: 10001234">
+                                <label>GPC Titel (niet code!)</label>
+                                <input type="text" value="${data.Gpc || ''}" class="regular-text" 
+                                       data-index="${index}" data-field="Gpc" 
+                                       placeholder="Bijv: Gevechtsport Artikelen - Overig">
                             </div>
                         </div>
                         
                         <div class="gs1-form-row">
                             <div class="gs1-form-group">
                                 <label>Verpakkingstype</label>
-                                <select data-index="${index}" data-field="packagingType">
-                                    <option value="Doos" ${product.data.packagingType === 'Doos' ? 'selected' : ''}>Doos</option>
-                                    <option value="Zak" ${product.data.packagingType === 'Zak' ? 'selected' : ''}>Zak</option>
-                                    <option value="Blister" ${product.data.packagingType === 'Blister' ? 'selected' : ''}>Blister</option>
-                                    <option value="Fles" ${product.data.packagingType === 'Fles' ? 'selected' : ''}>Fles</option>
-                                    <option value="Blik" ${product.data.packagingType === 'Blik' ? 'selected' : ''}>Blik</option>
+                                <select data-index="${index}" data-field="PackagingType">
+                                    <option value="Doos" ${data.PackagingType === 'Doos' ? 'selected' : ''}>Doos</option>
+                                    <option value="Zak" ${data.PackagingType === 'Zak' ? 'selected' : ''}>Zak</option>
+                                    <option value="Blister" ${data.PackagingType === 'Blister' ? 'selected' : ''}>Blister</option>
+                                    <option value="Fles" ${data.PackagingType === 'Fles' ? 'selected' : ''}>Fles</option>
+                                    <option value="Blik" ${data.PackagingType === 'Blik' ? 'selected' : ''}>Blik</option>
                                 </select>
                             </div>
                             <div class="gs1-form-group">
                                 <label>Consumenteneenheid</label>
-                                <select data-index="${index}" data-field="consumerUnit">
-                                    <option value="Ja" ${product.data.consumerUnit === 'Ja' ? 'selected' : ''}>Ja</option>
-<option value="Nee" ${product.data.consumerUnit === 'Nee' ? 'selected' : ''}>Nee</option>
+                                <select data-index="${index}" data-field="ConsumerUnit">
+                                    <option value="Ja" ${data.ConsumerUnit === 'Ja' ? 'selected' : ''}>Ja</option>
+                                    <option value="Nee" ${data.ConsumerUnit === 'Nee' ? 'selected' : ''}>Nee</option>
                                 </select>
                             </div>
                         </div>
@@ -432,26 +492,22 @@
                         <div class="gs1-form-row">
                             <div class="gs1-form-group">
                                 <label>Netto inhoud</label>
-                                <input type="text" value="${product.data.netContent || ''}" class="regular-text" 
-                                       data-index="${index}" data-field="netContent" 
-                                       placeholder="Bijv: 500">
+                                <input type="text" value="${data.NetContent || ''}" class="regular-text" 
+                                       data-index="${index}" data-field="NetContent" 
+                                       placeholder="Bijv: 1">
                             </div>
                             <div class="gs1-form-group">
-                                <label>Maateenheid</label>
-                                <select data-index="${index}" data-field="measurementUnit">
-                                    <option value="kilogram" ${product.data.measurementUnit === 'kilogram' ? 'selected' : ''}>Kilogram</option>
-                                    <option value="gram" ${product.data.measurementUnit === 'gram' ? 'selected' : ''}>Gram</option>
-                                    <option value="liter" ${product.data.measurementUnit === 'liter' ? 'selected' : ''}>Liter</option>
-                                    <option value="milliliter" ${product.data.measurementUnit === 'milliliter' ? 'selected' : ''}>Milliliter</option>
-                                    <option value="stuks" ${product.data.measurementUnit === 'stuks' ? 'selected' : ''}>Stuks</option>
-                                </select>
+                                <label>Maateenheid (met Engels!)</label>
+                                <input type="text" value="${data.MeasurementUnit || 'Stuks (piece)'}" class="regular-text" 
+                                       data-index="${index}" data-field="MeasurementUnit"
+                                       placeholder="Bijv: Paar (pair)">
                             </div>
                         </div>
                         
                         <div class="gs1-form-group">
                             <label>Beschrijving (max 300 tekens) *</label>
-                            <textarea rows="3" class="large-text" data-index="${index}" data-field="description" 
-                                      maxlength="300">${product.data.description || ''}</textarea>
+                            <textarea rows="3" class="large-text" data-index="${index}" data-field="Description" 
+                                      maxlength="300">${data.Description || ''}</textarea>
                         </div>
                     </div>
                 `;
@@ -475,7 +531,7 @@
             let isValid = true;
             
             this.registrationData.forEach((product) => {
-                if (!product.data.description || product.data.description.trim() === '') {
+                if (!product.data.Description || product.data.Description.trim() === '') {
                     this.showError('Beschrijving is verplicht voor alle producten');
                     isValid = false;
                 }
@@ -485,16 +541,9 @@
         },
         
         submitRegistration: function() {
-    this.showRegistrationStep(3);
-    
-    // Force consumerUnit to 'Ja'
-    this.registrationData.forEach(item => {
-        if (item.data) {
-            item.data.consumerUnit = 'Ja';
-        }
-    });
-    
-    $.ajax({
+            this.showRegistrationStep(3);
+            
+            $.ajax({
                 url: gs1GtinAdmin.ajaxUrl,
                 type: 'POST',
                 data: {
@@ -519,6 +568,7 @@
                             <div class="notice notice-error">
                                 <p><strong>Registratie mislukt</strong></p>
                                 <p>${response.data.error || 'Onbekende fout'}</p>
+                                <p>Check de logs voor meer details.</p>
                             </div>
                         `);
                     }
@@ -574,8 +624,146 @@
             });
         },
         
-        // Status
+        resetLastUsed: function(e) {
+            const contract = $(e.target).data('contract');
+            
+            if (!confirm(`Weet je zeker dat je de "Laatst Gebruikt" voor contract ${contract} wilt resetten?\n\nDe volgende GTIN begint weer vanaf het begin van de range.`)) {
+                return;
+            }
+            
+            const button = $(e.target);
+            button.prop('disabled', true).text('Resetten...');
+            
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_reset_last_used',
+                    nonce: gs1GtinAdmin.nonce,
+                    contract_number: contract
+                },
+                success: (response) => {
+                    if (response.success) {
+                        this.showSuccess('Last used gereset');
+                        location.reload();
+                    } else {
+                        this.showError(response.data.message || 'Reset mislukt');
+                    }
+                },
+                error: () => {
+                    this.showError('Netwerkfout');
+                },
+                complete: () => {
+                    button.prop('disabled', false).text('🔄 Reset');
+                }
+            });
+        },
+        
+        openSetLastUsedModal: function(e) {
+            const button = $(e.target);
+            const contract = button.data('contract');
+            const start = button.data('start');
+            const end = button.data('end');
+            
+            // Get current last_used via table
+            const currentText = button.closest('tr').find('td:eq(5)').text().trim();
+            const current = currentText === 'Niet gebruikt' ? '-' : currentText;
+            
+            $('#gs1-modal-contract').text(contract);
+            $('#gs1-modal-current').text(current);
+            $('#gs1-modal-start').text(start);
+            $('#gs1-modal-end').text(end);
+            $('#gs1-new-last-used').val('').data('contract', contract).data('start', start).data('end', end);
+            
+            $('#gs1-set-last-used-modal').show();
+        },
+        
+        confirmSetLastUsed: function() {
+            const input = $('#gs1-new-last-used');
+            const newValue = input.val().trim();
+            const contract = input.data('contract');
+            const start = parseInt(input.data('start'));
+            const end = parseInt(input.data('end'));
+            
+            // Validate
+            if (!newValue) {
+                this.showError('Vul een GTIN in');
+                return;
+            }
+            
+            if (newValue.length !== 12) {
+                this.showError('GTIN moet exact 12 cijfers zijn (zonder checkdigit)');
+                return;
+            }
+            
+            if (!/^\d+$/.test(newValue)) {
+                this.showError('GTIN mag alleen cijfers bevatten');
+                return;
+            }
+            
+            const newValueInt = parseInt(newValue);
+            if (newValueInt < start || newValueInt > end) {
+                this.showError(`GTIN moet tussen ${start} en ${end} liggen`);
+                return;
+            }
+            
+            $('#gs1-confirm-set-last-used').prop('disabled', true).text('Instellen...');
+            
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_set_last_used',
+                    nonce: gs1GtinAdmin.nonce,
+                    contract_number: contract,
+                    last_used: newValue
+                },
+                success: (response) => {
+                    if (response.success) {
+                        this.showSuccess('Last used ingesteld');
+                        $('#gs1-set-last-used-modal').hide();
+                        location.reload();
+                    } else {
+                        this.showError(response.data.message || 'Instellen mislukt');
+                    }
+                },
+                error: () => {
+                    this.showError('Netwerkfout');
+                },
+                complete: () => {
+                    $('#gs1-confirm-set-last-used').prop('disabled', false).text('Instellen');
+                }
+            });
+        },
+        
         checkRegistration: function(invocationId) {
+            const button = $(`button[data-invocation-id="${invocationId}"]`);
+            button.prop('disabled', true).text('Checken...');
+            
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_check_registration',
+                    nonce: gs1GtinAdmin.nonce,
+                    invocation_id: invocationId
+                },
+                success: (response) => {
+                    if (response.success) {
+                        this.showSuccess(`${response.data.updated} producten bijgewerkt`);
+                        location.reload();
+                    } else {
+                        this.showError(response.data.message || 'Check mislukt');
+                    }
+                },
+                error: () => {
+                    this.showError('Netwerkfout');
+                },
+                complete: () => {
+                    button.prop('disabled', false).text('Status Checken');
+                }
+            });
+        },
             $(`button[data-invocation-id="${invocationId}"]`).prop('disabled', true).text('Checken...');
             
             // In real implementation, this would call the API
@@ -601,7 +789,7 @@
         // Logs
         viewLog: function(filename) {
             $('.gs1-log-viewer').show();
-            $('#gs1-current-log-name').text(filename);
+            $('#gs1-current-log-name').text(filename).data('filename', filename);
             $('#gs1-log-content-pre').html('<span class="spinner is-active"></span> Log laden...');
             
             $.ajax({
@@ -622,22 +810,71 @@
             });
         },
         
+        copyLog: function() {
+            const content = $('#gs1-log-content-pre').text();
+            navigator.clipboard.writeText(content).then(() => {
+                this.showSuccess('Log gekopieerd naar clipboard');
+            });
+        },
+        
+        clearLog: function() {
+            if (!confirm('Weet je zeker dat je deze log wilt legen?')) return;
+            
+            const filename = $('#gs1-current-log-name').data('filename');
+            
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_clear_log',
+                    nonce: gs1GtinAdmin.nonce,
+                    filename: filename
+                },
+                success: (response) => {
+                    if (response.success) {
+                        this.showSuccess('Log geleegd');
+                        $('#gs1-log-content-pre').text('');
+                    } else {
+                        this.showError(response.data.message);
+                    }
+                }
+            });
+        },
+        
+        deleteCurrentLog: function() {
+            if (!confirm('Weet je zeker dat je deze log wilt verwijderen?')) return;
+            
+            const filename = $('#gs1-current-log-name').data('filename');
+            this.deleteLog(filename);
+        },
+        
+        deleteLog: function(filename) {
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_delete_log',
+                    nonce: gs1GtinAdmin.nonce,
+                    filename: filename
+                },
+                success: (response) => {
+                    if (response.success) {
+                        this.showSuccess('Log verwijderd');
+                        $('.gs1-log-viewer').hide();
+                        location.reload();
+                    } else {
+                        this.showError(response.data.message);
+                    }
+                }
+            });
+        },
+        
         filterLogs: function(level) {
             if (level === '') {
                 $('#gs1-db-logs-table tbody tr').show();
             } else {
                 $('#gs1-db-logs-table tbody tr').hide();
                 $(`#gs1-db-logs-table tbody tr[data-level="${level}"]`).show();
-            }
-        },
-        
-        viewLogContext: function(context) {
-            $('#gs1-log-context-modal').show();
-            try {
-                const parsed = JSON.parse(context);
-                $('#gs1-log-context-content').text(JSON.stringify(parsed, null, 2));
-            } catch(e) {
-                $('#gs1-log-context-content').text(context);
             }
         },
         
@@ -672,11 +909,11 @@
         
         saveGpcMapping: function(e) {
             const row = $(e.target).closest('tr');
-            const categoryId = row.find('select[name="category_id"]').val();
+            const itemGroupId = row.find('.gs1-item-group-select').val();
             const gpcCode = row.find('input[name="gpc_code"]').val();
             const gpcTitle = row.find('input[name="gpc_title"]').val();
             
-            if (!categoryId || !gpcCode || !gpcTitle) {
+            if (!itemGroupId || !gpcCode || !gpcTitle) {
                 this.showError('Alle velden zijn verplicht');
                 return;
             }
@@ -687,7 +924,7 @@
                 data: {
                     action: 'gs1_save_gpc_mapping',
                     nonce: gs1GtinAdmin.nonce,
-                    category_id: categoryId,
+                    item_group_id: itemGroupId,
                     gpc_code: gpcCode,
                     gpc_title: gpcTitle
                 },
