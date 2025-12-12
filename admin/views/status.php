@@ -59,9 +59,9 @@ $recent_registrations = $wpdb->get_results(
                     <td><?php echo esc_html($reg->started_at); ?></td>
                     <td>
                         <button type="button" class="button gs1-check-registration" 
-                                data-invocation-id="<?php echo esc_attr($reg->invocation_id); ?>">
-                            Status Checken
-                        </button>
+        data-invocation-id="<?php echo esc_attr(trim($reg->invocation_id, '"')); ?>">
+    Status Checken
+</button>
                     </td>
                 </tr>
                 <?php endforeach; ?>

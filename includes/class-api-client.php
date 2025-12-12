@@ -164,10 +164,10 @@ class GS1_GTIN_API_Client {
             ]);
             
             return [
-                'success' => true,
-                'data' => trim($response_body), // Plain text InvocationId
-                'code' => $response_code
-            ];
+    'success' => true,
+    'data' => trim($response_body, '"'), // Remove quotes from InvocationId!
+    'code' => $response_code
+];
         }
         
         // Andere responses zijn JSON

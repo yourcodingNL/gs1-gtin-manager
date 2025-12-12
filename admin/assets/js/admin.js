@@ -484,7 +484,6 @@
                                 <label>Consumenteneenheid</label>
                                 <select data-index="${index}" data-field="ConsumerUnit">
                                     <option value="Ja" ${data.ConsumerUnit === 'Ja' ? 'selected' : ''}>Ja</option>
-                                    <option value="Nee" ${data.ConsumerUnit === 'Nee' ? 'selected' : ''}>Nee</option>
                                 </select>
                             </div>
                         </div>
@@ -763,14 +762,6 @@
                     button.prop('disabled', false).text('Status Checken');
                 }
             });
-        },
-            $(`button[data-invocation-id="${invocationId}"]`).prop('disabled', true).text('Checken...');
-            
-            // In real implementation, this would call the API
-            setTimeout(() => {
-                this.showSuccess('Registratie status gecheckt');
-                location.reload();
-            }, 1000);
         },
         
         viewRegistrationDetails: function(invocationId) {

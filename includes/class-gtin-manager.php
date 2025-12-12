@@ -262,20 +262,20 @@ class GS1_GTIN_Manager {
                 ? $measurement_translations[$measurement_unit_capitalized] 
                 : $measurement_unit_capitalized . ' (piece)'; // Default fallback
             
-            // FIX 1 & 2: PascalCase field names + 13-digit GTIN with checkdigit
-            $data = [
-                'Gtin' => $assignment->gtin, 
-                'Status' => 'Actief',
-                'Description' => substr($product->get_name(), 0, 300),
-                'BrandName' => $brand,
-                'Language' => 'Nederlands',
-                'TargetMarketCountry' => 'Europese Unie',
-                'ConsumerUnit' => 'Ja',
-                'PackagingType' => $packaging_type,
-                'ContractNumber' => $assignment->contract_number,
-                'NetContent' => intval($net_content),
-                'MeasurementUnit' => $measurement_unit_with_english // FIX 4: With English!
-            ];
+            // Prepare data with CORRECT field values according to GS1 API spec
+$data = [
+    'Gtin' => $assignment->gtin, // 12 digits (without checkdigit)
+    'Status' => 'Actief',
+    'Description' => substr($product->get_name(), 0, 300), // Max 300 chars
+    'BrandName' => $brand,
+    'Language' => 'Nederlands',
+    'TargetMarketCountry' => 'Europese Unie',
+    'ConsumerUnit' => 'Ja', // Always Ja for consumer products
+    'PackagingType' => 'Doos', // FIXED: GS1 wil "Doos" niet "Zak"!
+    'ContractNumber' => $assignment->contract_number,
+    'NetContent' => intval($net_content), // Integer!
+    'MeasurementUnit' => 'Paar' // FIXED: Alleen Nederlands, geen "(pair)"!
+];
             
             GS1_GTIN_Logger::log("Base data built with PascalCase and 13-digit GTIN", 'debug', $data);
             
