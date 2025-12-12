@@ -35,7 +35,7 @@ class GS1_GTIN_Database {
             invocation_id varchar(100) DEFAULT NULL,
             error_message text DEFAULT NULL,
             gpc_code varchar(20) DEFAULT NULL,
-            packaging_type varchar(100) DEFAULT 'Doos',
+            packaging_type varchar(100) DEFAULT 'Zak',
             net_content varchar(50) DEFAULT NULL,
             measurement_unit varchar(50) DEFAULT NULL,
             consumer_unit tinyint(1) DEFAULT 1,
@@ -100,6 +100,27 @@ class GS1_GTIN_Database {
         ) $charset_collate;";
         
         dbDelta($sql_gpc);
+        
+        // Reference Data table
+        $table_reference = $wpdb->prefix . 'gs1_gtin_reference_data';
+        $sql_reference = "CREATE TABLE {$table_reference} (
+            id bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+            category varchar(50) NOT NULL,
+            value_nl varchar(255) NOT NULL,
+            value_en varchar(255) NOT NULL,
+            code varchar(50) DEFAULT NULL,
+            is_active tinyint(1) DEFAULT 1,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
+            KEY category (category),
+            KEY is_active (is_active)
+        ) $charset_collate;";
+        
+        dbDelta($sql_reference);
+        
+        // Insert default reference data
+        self::insert_default_reference_data();
         
         GS1_GTIN_Logger::log('Database tables created/updated', 'info');
     }
@@ -522,5 +543,114 @@ class GS1_GTIN_Database {
             return substr($gtin, 0, 12);
         }
         return str_pad($gtin, 12, '0', STR_PAD_LEFT);
+    }
+/**
+     * Insert default reference data
+     */
+    public static function insert_default_reference_data() {
+        global $wpdb;
+        $table = $wpdb->prefix . 'gs1_gtin_reference_data';
+        
+        // Check if already has data
+        $count = $wpdb->get_var("SELECT COUNT(*) FROM {$table}");
+        if ($count > 0) {
+            return; // Already has data
+        }
+        
+        // Default packaging types
+        $defaults = [
+            // Packaging
+            ['category' => 'packaging', 'value_nl' => 'Doos', 'value_en' => 'Box', 'code' => null],
+            ['category' => 'packaging', 'value_nl' => 'Zak', 'value_en' => 'Bag', 'code' => null],
+            ['category' => 'packaging', 'value_nl' => 'Blister', 'value_en' => 'Blister', 'code' => null],
+            ['category' => 'packaging', 'value_nl' => 'Fles', 'value_en' => 'Bottle', 'code' => null],
+            ['category' => 'packaging', 'value_nl' => 'Blik', 'value_en' => 'Can', 'code' => null],
+            
+            // Measurement units
+            ['category' => 'measurement', 'value_nl' => 'Stuks', 'value_en' => 'piece', 'code' => null],
+            ['category' => 'measurement', 'value_nl' => 'Paar', 'value_en' => 'pair', 'code' => null],
+            ['category' => 'measurement', 'value_nl' => 'Sets', 'value_en' => 'set', 'code' => null],
+            
+            // Countries
+            ['category' => 'country', 'value_nl' => 'Europese Unie', 'value_en' => 'European Union', 'code' => 'EU'],
+            ['category' => 'country', 'value_nl' => 'Nederland', 'value_en' => 'Netherlands', 'code' => 'NL'],
+            ['category' => 'country', 'value_nl' => 'België', 'value_en' => 'Belgium', 'code' => 'BE'],
+        ];
+        
+        foreach ($defaults as $item) {
+            $wpdb->insert($table, $item, ['%s', '%s', '%s', '%s']);
+        }
+        
+        GS1_GTIN_Logger::log('Default reference data inserted', 'info');
+    }
+    
+    /**
+     * Get reference data by category
+     */
+    public static function get_reference_data($category, $active_only = true) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'gs1_gtin_reference_data';
+        
+        $where = $wpdb->prepare("category = %s", $category);
+        if ($active_only) {
+            $where .= " AND is_active = 1";
+        }
+        
+        return $wpdb->get_results("SELECT * FROM {$table} WHERE {$where} ORDER BY value_nl");
+    }
+    
+    /**
+     * Save reference data item
+     */
+    public static function save_reference_data($data) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'gs1_gtin_reference_data';
+        
+        $defaults = [
+            'category' => '',
+            'value_nl' => '',
+            'value_en' => '',
+            'code' => null,
+            'is_active' => 1
+        ];
+        
+        $data = wp_parse_args($data, $defaults);
+        
+        if (isset($data['id']) && $data['id']) {
+            // Update
+            $id = $data['id'];
+            unset($data['id']);
+            
+            $wpdb->update(
+                $table,
+                $data,
+                ['id' => $id],
+                ['%s', '%s', '%s', '%s', '%d'],
+                ['%d']
+            );
+            
+            return $id;
+        } else {
+            // Insert
+            unset($data['id']);
+            
+            $wpdb->insert(
+                $table,
+                $data,
+                ['%s', '%s', '%s', '%s', '%d']
+            );
+            
+            return $wpdb->insert_id;
+        }
+    }
+    
+    /**
+     * Delete reference data item
+     */
+    public static function delete_reference_data($id) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'gs1_gtin_reference_data';
+        
+        return $wpdb->delete($table, ['id' => $id], ['%d']);
     }
 }

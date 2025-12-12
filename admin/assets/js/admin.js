@@ -123,6 +123,19 @@
                 $(e.target).closest('tr').remove();
             });
             $(document).on('click', '.gs1-delete-gpc-mapping', (e) => this.deleteGpcMapping(e));
+            
+            /// Database management
+            $(document).on('click', '.gs1-check-database', () => this.checkDatabase());
+            $(document).on('click', '.gs1-fix-database', () => this.fixDatabase());
+            
+            // Reference data tab
+            $(document).on('click', '.gs1-add-reference-item', (e) => this.openReferenceModal(e));
+            $(document).on('click', '.gs1-edit-reference-item', (e) => this.openReferenceModal(e));
+            $(document).on('click', '.gs1-delete-reference-item', (e) => this.deleteReferenceItem(e));
+            $(document).on('click', '#gs1-save-reference-item', () => this.saveReferenceItem());
+            $(document).on('click', '#gs1-cancel-reference-modal, #gs1-reference-modal .gs1-modal-close', () => {
+                $('#gs1-reference-modal').hide();
+            });
         },
         
         // Load products
@@ -388,21 +401,26 @@
             });
         },
         
-        renderRegistrationStep1: function() {
-            const html = this.registrationData.map((product) => {
-                // Show 13-digit GTIN if available
-                let gtinDisplay = product.data.Gtin || '-';
-                
-                return `
-                    <div class="gs1-registration-product-item">
-                        <strong>${product.product_name}</strong> (SKU: ${product.sku})<br>
-                        <small>GTIN: ${gtinDisplay} | Merk: ${product.data.BrandName || '-'}</small>
-                    </div>
-                `;
-            }).join('');
+       renderRegistrationStep1: function() {
+        // Check if any products are already registered
+        const hasRegistered = this.registrationData.some(p => {
+            // Check assignment table via AJAX would be better, but check Status for now
+            return false; // We'll get this from backend
+        });
+        
+        const html = this.registrationData.map((product) => {
+            let gtinDisplay = product.data.Gtin || '-';
             
-            $('#gs1-registration-products-list').html(html);
-        },
+            return `
+                <div class="gs1-registration-product-item">
+                    <strong>${product.product_name}</strong> (SKU: ${product.sku})<br>
+                    <small>GTIN: ${gtinDisplay} | Merk: ${product.data.BrandName || '-'}</small>
+                </div>
+            `;
+        }).join('');
+        
+        $('#gs1-registration-products-list').html(html);
+    },
         
         nextRegistrationStep: function() {
             if (this.registrationStep === 1) {
@@ -496,11 +514,11 @@
                                        placeholder="Bijv: 1">
                             </div>
                             <div class="gs1-form-group">
-                                <label>Maateenheid (met Engels!)</label>
-                                <input type="text" value="${data.MeasurementUnit || 'Stuks (piece)'}" class="regular-text" 
-                                       data-index="${index}" data-field="MeasurementUnit"
-                                       placeholder="Bijv: Paar (pair)">
-                            </div>
+                            <label>Maateenheid</label>
+                            <select data-index="${index}" data-field="MeasurementUnit" class="gs1-measurement-select">
+                                <option value="">Laden...</option>
+                            </select>
+                        </div>
                         </div>
                         
                         <div class="gs1-form-group">
@@ -513,6 +531,9 @@
             }).join('');
             
             $('#gs1-registration-data-form').html(html);
+            
+            // Load measurement units dynamically
+            this.loadMeasurementUnits();
             
             // Bind change events
             $('#gs1-registration-data-form input, #gs1-registration-data-form select, #gs1-registration-data-form textarea').on('change', (e) => {
@@ -765,17 +786,47 @@
         },
         
         viewRegistrationDetails: function(invocationId) {
-            $('#gs1-registration-details-modal').show();
-            $('#gs1-registration-details-body').html('<p><span class="spinner is-active"></span> Details laden...</p>');
-            
-            // Load details - in real implementation this would be an AJAX call
-            setTimeout(() => {
-                $('#gs1-registration-details-body').html(`
-                    <p>Details voor Invocation ID: <code>${invocationId}</code></p>
-                    <p><em>Hier komen de details van de registratie</em></p>
-                `);
-            }, 500);
-        },
+        $('#gs1-registration-details-modal').show();
+        $('#gs1-registration-details-body').html('<p><span class="spinner is-active"></span> Details laden...</p>');
+        
+        $.ajax({
+            url: gs1GtinAdmin.ajaxUrl,
+            type: 'POST',
+            data: {
+                action: 'gs1_get_registration_details',
+                nonce: gs1GtinAdmin.nonce,
+                invocation_id: invocationId
+            },
+            success: (response) => {
+                if (response.success) {
+                    const data = response.data;
+                    let html = `<h3>Invocation ID: <code>${invocationId}</code></h3>`;
+                    
+                    if (data.successfulProducts && data.successfulProducts.length > 0) {
+                        html += `<h4 style="color: #00a32a;">✅ Succesvol (${data.successfulProducts.length})</h4>`;
+                        html += '<table class="wp-list-table widefat fixed striped"><thead><tr><th>GTIN</th><th>Beschrijving</th><th>Status</th></tr></thead><tbody>';
+                        data.successfulProducts.forEach(p => {
+                            html += `<tr><td><code>${p.gtin}</code></td><td>${p.description}</td><td>${p.status}</td></tr>`;
+                        });
+                        html += '</tbody></table>';
+                    }
+                    
+                    if (data.errorMessages && data.errorMessages.length > 0) {
+                        html += `<h4 style="color: #d63638; margin-top: 20px;">❌ Errors (${data.errorMessages.length})</h4>`;
+                        html += '<table class="wp-list-table widefat fixed striped"><thead><tr><th>Index</th><th>Error Code</th><th>Bericht</th></tr></thead><tbody>';
+                        data.errorMessages.forEach(e => {
+                            html += `<tr><td>${e.index}</td><td>${e.errorCode}</td><td>${e.errorMessageNl || e.errorMessageEn}</td></tr>`;
+                        });
+                        html += '</tbody></table>';
+                    }
+                    
+                    $('#gs1-registration-details-body').html(html);
+                } else {
+                    $('#gs1-registration-details-body').html('<p style="color: #d63638;">Fout bij laden</p>');
+                }
+            }
+        });
+    },
         
         // Logs
         viewLog: function(filename) {
@@ -970,6 +1021,215 @@
             setTimeout(() => {
                 notice.fadeOut(() => notice.remove());
             }, 5000);
+        },
+        
+        // Database Management
+        checkDatabase: function() {
+            const button = $('.gs1-check-database');
+            button.prop('disabled', true).text('Checken...');
+            
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_check_database',
+                    nonce: gs1GtinAdmin.nonce
+                },
+                success: (response) => {
+                    const statusDiv = $('#gs1-database-status');
+                    
+                    if (response.success) {
+                        statusDiv.html(`<div class="notice notice-success inline"><p>${response.data.message}</p></div>`);
+                    } else {
+                        let html = `<div class="notice notice-warning inline"><p>${response.data.message}</p><ul>`;
+                        for (const [table, exists] of Object.entries(response.data.status)) {
+                            const icon = exists ? '✓' : '✗';
+                            const color = exists ? 'green' : 'red';
+                            html += `<li style="color: ${color}">${icon} ${table}</li>`;
+                        }
+                        html += '</ul></div>';
+                        statusDiv.html(html);
+                    }
+                },
+                complete: () => {
+                    button.prop('disabled', false).text('✓ Check Database Tabellen');
+                }
+            });
+        },
+        
+        fixDatabase: function() {
+            if (!confirm('Database tabellen aanmaken/bijwerken?')) return;
+            
+            const button = $('.gs1-fix-database');
+            button.prop('disabled', true).text('Fixen...');
+            
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_fix_database',
+                    nonce: gs1GtinAdmin.nonce
+                },
+                success: (response) => {
+                    if (response.success) {
+                        this.showSuccess(response.data.message);
+                        $('#gs1-database-status').html('<div class="notice notice-success inline"><p>✓ Database OK</p></div>');
+                    } else {
+                        this.showError('Fout bij aanmaken tabellen');
+                    }
+                },
+                complete: () => {
+                    button.prop('disabled', false).text('🔧 Fix Database Tabellen');
+                }
+            });
+        },
+        
+        // Reference Data Methods
+        openReferenceModal: function(e) {
+            const button = $(e.target);
+            const category = button.data('category');
+            const id = button.data('id') || '';
+            const valueNl = button.data('value-nl') || '';
+            const valueEn = button.data('value-en') || '';
+            const code = button.data('code') || '';
+            const isActive = button.data('is-active') || 1;
+            
+            $('#gs1-ref-id').val(id);
+            $('#gs1-ref-category').val(category);
+            $('#gs1-ref-value-nl').val(valueNl);
+            $('#gs1-ref-value-en').val(valueEn);
+            $('#gs1-ref-code').val(code);
+            $('#gs1-ref-is-active').prop('checked', isActive == 1);
+            
+            if (category === 'country') {
+                $('#gs1-ref-code-row').show();
+                $('#gs1-ref-code').prop('required', true);
+            } else {
+                $('#gs1-ref-code-row').hide();
+                $('#gs1-ref-code').prop('required', false);
+            }
+            
+            const titles = {
+                'packaging': id ? 'Verpakkingstype Bewerken' : 'Nieuw Verpakkingstype',
+                'measurement': id ? 'Maateenheid Bewerken' : 'Nieuwe Maateenheid',
+                'country': id ? 'Land Bewerken' : 'Nieuw Land'
+            };
+            $('#gs1-reference-modal-title').text(titles[category] || 'Reference Data');
+            
+            $('#gs1-reference-modal').show();
+        },
+        
+        saveReferenceItem: function() {
+            const id = $('#gs1-ref-id').val();
+            const category = $('#gs1-ref-category').val();
+            const valueNl = $('#gs1-ref-value-nl').val().trim();
+            const valueEn = $('#gs1-ref-value-en').val().trim();
+            const code = $('#gs1-ref-code').val().trim();
+            const isActive = $('#gs1-ref-is-active').is(':checked') ? 1 : 0;
+            
+            if (!valueNl || !valueEn) {
+                this.showError('Nederlands en Engels zijn verplicht');
+                return;
+            }
+            
+            if (category === 'country' && !code) {
+                this.showError('Code is verplicht voor landen');
+                return;
+            }
+            
+            const button = $('#gs1-save-reference-item');
+            button.prop('disabled', true).text('Opslaan...');
+            
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_save_reference_data',
+                    nonce: gs1GtinAdmin.nonce,
+                    id: id,
+                    category: category,
+                    value_nl: valueNl,
+                    value_en: valueEn,
+                    code: code || null,
+                    is_active: isActive
+                },
+                success: (response) => {
+                    if (response.success) {
+                        this.showSuccess(response.data.message || 'Opgeslagen');
+                        $('#gs1-reference-modal').hide();
+                        location.reload();
+                    } else {
+                        this.showError(response.data.message || 'Fout bij opslaan');
+                    }
+                },
+                error: () => {
+                    this.showError('Netwerkfout');
+                },
+                complete: () => {
+                    button.prop('disabled', false).text('Opslaan');
+                }
+            });
+        },
+        
+        loadMeasurementUnits: function() {
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_get_measurement_units',
+                    nonce: gs1GtinAdmin.nonce
+                },
+                success: (response) => {
+                    if (response.success) {
+                        const units = response.data.units;
+                        
+                        $('.gs1-measurement-select').each(function() {
+                            const select = $(this);
+                            const index = select.data('index');
+                            const currentValue = select.closest('.gs1-registration-data-item')
+                                .find(`[data-index="${index}"][data-field="MeasurementUnit"]`)
+                                .val() || 'Stuks (piece)';
+                            
+                            select.empty();
+                            
+                            units.forEach(unit => {
+                                const value = unit.value_nl + ' (' + unit.value_en + ')';
+                                const selected = currentValue === value ? 'selected' : '';
+                                select.append(`<option value="${value}" ${selected}>${value}</option>`);
+                            });
+                        });
+                    }
+                }
+            });
+        },
+        
+        deleteReferenceItem: function(e) {
+            if (!confirm('Weet je zeker dat je dit item wilt verwijderen?')) {
+                return;
+            }
+            
+            const id = $(e.target).data('id');
+            
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_delete_reference_data',
+                    nonce: gs1GtinAdmin.nonce,
+                    id: id
+                },
+                success: (response) => {
+                    if (response.success) {
+                        this.showSuccess(response.data.message || 'Verwijderd');
+                        location.reload();
+                    } else {
+                        this.showError(response.data.message || 'Fout bij verwijderen');
+                    }
+                },
+                error: () => {
+                    this.showError('Netwerkfout');
+                }
+            });
         }
     };
     

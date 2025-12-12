@@ -161,6 +161,21 @@ class GS1_GTIN_Settings {
         
         <hr>
         
+        <h2>Database Beheer</h2>
+        <table class="form-table">
+            <tr>
+                <th scope="row">Database Status</th>
+                <td>
+                    <button type="button" class="button gs1-check-database">✓ Check Database Tabellen</button>
+                    <button type="button" class="button button-primary gs1-fix-database">🔧 Fix Database Tabellen</button>
+                    <div id="gs1-database-status" style="margin-top: 10px;"></div>
+                    <p class="description">Check of alle tabellen bestaan en maak ze indien nodig aan.</p>
+                </td>
+            </tr>
+        </table>
+        
+        <hr>
+        
         <h2>GPC Categorie Mappings</h2>
         <p>Koppel Item Groups (pa_xcore_item_group) aan GS1 GPC codes. Dit zorgt ervoor dat de juiste GPC code automatisch wordt toegewezen.</p>
         

@@ -139,7 +139,28 @@ class GS1_GTIN_Manager {
             $results
         );
         
-        return $results;
+return $results;
+    }
+    
+    /**
+     * Get target market country from Reference Data
+     */
+    private static function get_target_market_country() {
+        $countries = GS1_GTIN_Database::get_reference_data('country', true);
+        if (!empty($countries)) {
+            // Get default country from wp_options
+            $default_id = get_option('gs1_default_country');
+            if ($default_id) {
+                foreach ($countries as $country) {
+                    if ($country->id == $default_id) {
+                        return $country->value_nl;
+                    }
+                }
+            }
+            // Fallback: first active country
+            return $countries[0]->value_nl;
+        }
+        return 'Europese Unie'; // Ultimate fallback
     }
     
     /**
@@ -240,9 +261,96 @@ class GS1_GTIN_Manager {
             
             GS1_GTIN_Logger::log("Packaging type after mapping: {$packaging_type}", 'debug');
             
-            // Get net content and measurement unit
-            $net_content = isset($assignment->net_content) && $assignment->net_content ? $assignment->net_content : 1;
-            $measurement_unit = isset($assignment->measurement_unit) && $assignment->measurement_unit ? $assignment->measurement_unit : 'Stuks';
+            // FORCE CORRECT VALUES - Ignore potentially wrong database values
+            
+            // FORCE ConsumerUnit = always "Ja" for consumer products
+            $consumer_unit = 'Ja';
+            
+            // Get default packaging type from Reference Data (first active item)
+            $packaging_types = GS1_GTIN_Database::get_reference_data('packaging', true);
+            $default_packaging = !empty($packaging_types) ? $packaging_types[0]->value_nl : 'Doos';
+            
+            // FORCE PackagingType - use database value if valid, otherwise use default
+            $packaging_type = $default_packaging;
+            if (!empty($assignment->packaging_type)) {
+                // Check if assignment packaging type exists in reference data
+                $valid_packaging = false;
+                foreach ($packaging_types as $pt) {
+                    if ($pt->value_nl === $assignment->packaging_type) {
+                        $valid_packaging = true;
+                        $packaging_type = $assignment->packaging_type;
+                        break;
+                    }
+                }
+                if (!$valid_packaging) {
+                    GS1_GTIN_Logger::log("Invalid packaging type '{$assignment->packaging_type}', using default '{$default_packaging}'", 'warning');
+                }
+            }
+            
+            // FORCE NetContent = minimum 1, always integer
+            $net_content = 1;
+            if (isset($assignment->net_content) && $assignment->net_content && intval($assignment->net_content) > 0) {
+                $net_content = intval($assignment->net_content);
+            }
+            
+            // FORCE MeasurementUnit based on product name detection OR database
+            $measurement_units = GS1_GTIN_Database::get_reference_data('measurement', true);
+            $default_measurement = !empty($measurement_units) ? $measurement_units[0]->value_nl : 'Stuks';
+            
+            $measurement_unit = $default_measurement;
+            $product_name_lower = strtolower($product->get_name());
+            
+            // First check product name for explicit hints
+            if (stripos($product_name_lower, 'paar') !== false || 
+                stripos($product_name_lower, 'pair') !== false) {
+                // Find "Paar" in reference data
+                foreach ($measurement_units as $mu) {
+                    if (strtolower($mu->value_nl) === 'paar') {
+                        $measurement_unit = $mu->value_nl;
+                        break;
+                    }
+                }
+            }
+            elseif (stripos($product_name_lower, 'set') !== false) {
+                // Find "Sets" in reference data
+                foreach ($measurement_units as $mu) {
+                    if (strtolower($mu->value_nl) === 'sets') {
+                        $measurement_unit = $mu->value_nl;
+                        break;
+                    }
+                }
+            }
+            elseif (!empty($assignment->measurement_unit)) {
+                // Check if assignment measurement unit exists in reference data
+                foreach ($measurement_units as $mu) {
+                    if ($mu->value_nl === $assignment->measurement_unit) {
+                        $measurement_unit = $assignment->measurement_unit;
+                        break;
+                    }
+                }
+            }
+            
+            GS1_GTIN_Logger::log("FORCED correct values", 'debug', [
+                'net_content' => $net_content,
+                'measurement_unit' => $measurement_unit,
+                'packaging_type' => $packaging_type,
+                'consumer_unit' => $consumer_unit
+            ]);
+            
+            // Prepare data with FORCED CORRECT field values
+            $data = [
+                'Gtin' => $assignment->gtin, // 12 digits (without checkdigit)
+                'Status' => 'Actief',
+                'Description' => substr($product->get_name(), 0, 300), // Max 300 chars
+                'BrandName' => $brand,
+                'Language' => 'Nederlands',
+                'TargetMarketCountry' => self::get_target_market_country(),
+                'ConsumerUnit' => $consumer_unit, // FORCED to "Ja"
+                'PackagingType' => $packaging_type, // From reference data or default
+                'ContractNumber' => $assignment->contract_number,
+                'NetContent' => $net_content, // FORCED to integer, minimum 1
+                'MeasurementUnit' => $measurement_unit // From reference data or product name
+            ];
 
             GS1_GTIN_Logger::log("Net content: {$net_content}, Unit: {$measurement_unit}", 'debug');
             
@@ -262,43 +370,25 @@ class GS1_GTIN_Manager {
                 ? $measurement_translations[$measurement_unit_capitalized] 
                 : $measurement_unit_capitalized . ' (piece)'; // Default fallback
             
-            // Prepare data with CORRECT field values according to GS1 API spec
-$data = [
-    'Gtin' => $assignment->gtin, // 12 digits (without checkdigit)
-    'Status' => 'Actief',
-    'Description' => substr($product->get_name(), 0, 300), // Max 300 chars
-    'BrandName' => $brand,
-    'Language' => 'Nederlands',
-    'TargetMarketCountry' => 'Europese Unie',
-    'ConsumerUnit' => 'Ja', // Always Ja for consumer products
-    'PackagingType' => 'Doos', // FIXED: GS1 wil "Doos" niet "Zak"!
-    'ContractNumber' => $assignment->contract_number,
-    'NetContent' => intval($net_content), // Integer!
-    'MeasurementUnit' => 'Paar' // FIXED: Alleen Nederlands, geen "(pair)"!
-];
+            
             
             GS1_GTIN_Logger::log("Base data built with PascalCase and 13-digit GTIN", 'debug', $data);
             
-            // FIX 3: Add GPC TITLE (not code)
-            if (!empty($assignment->gpc_code)) {
-                // Get GPC title from database mapping
-                $item_groups = wp_get_post_terms($product_id, 'pa_xcore_item_group', ['fields' => 'ids']);
-                if (!empty($item_groups) && !is_wp_error($item_groups)) {
-                    $gpc_mapping = GS1_GTIN_Database::get_gpc_mapping($item_groups[0]);
-                    if ($gpc_mapping && !empty($gpc_mapping->gpc_title)) {
-                        $data['Gpc'] = $gpc_mapping->gpc_title; // FIX 3: Title not code!
-                        GS1_GTIN_Logger::log("GPC title added: {$gpc_mapping->gpc_title} (code was: {$assignment->gpc_code})", 'debug');
-                    } else {
-                        GS1_GTIN_Logger::log("No GPC mapping found for item group", 'warning');
-                    }
-                } else {
-                    GS1_GTIN_Logger::log("No item groups found for product", 'warning');
-                }
-            } else {
-                GS1_GTIN_Logger::log("No GPC code in assignment", 'debug');
-            }
-            
-            // Add optional image
+          // FIX 3: Add GPC TITLE - ALWAYS fresh from product
+$item_groups = wp_get_post_terms($product_id, 'pa_xcore_item_group', ['fields' => 'ids']);
+if (!empty($item_groups) && !is_wp_error($item_groups)) {
+    $gpc_mapping = GS1_GTIN_Database::get_gpc_mapping($item_groups[0]);
+    if ($gpc_mapping && !empty($gpc_mapping->gpc_title)) {
+        $data['Gpc'] = $gpc_mapping->gpc_title;
+        GS1_GTIN_Logger::log("GPC title added: {$gpc_mapping->gpc_title}", 'debug');
+    } else {
+        GS1_GTIN_Logger::log("No GPC mapping found for item group", 'warning');
+    }
+} else {
+    GS1_GTIN_Logger::log("No item groups found for product", 'warning');
+}
+
+// Add optional image
             if ($image_url) {
                 $data['ImageUrl'] = $image_url;
                 GS1_GTIN_Logger::log("Image URL added", 'debug');
@@ -337,41 +427,87 @@ foreach ($product_ids as $product_id) {
             if (!$assignment || $assignment->external_registration) {
                 continue;
             }
-            
+            // SKIP als product al registered is
+if ($assignment->status === 'registered') {
+    GS1_GTIN_Logger::log("Product {$product_id} already registered, re-registering with same GTIN", 'info');
+}
             // Use provided data or prepare from product
             if (isset($registration_data[$product_id])) {
                 $product_data = $registration_data[$product_id];
                 
-                // Sanitize user-edited values (keep PascalCase)
-                if (isset($product_data['Language'])) {
-                    $product_data['Language'] = GS1_GTIN_Helpers::convert_language_code($product_data['Language']);
-                }
-                
-                if (isset($product_data['TargetMarketCountry'])) {
-                    $countries = GS1_GTIN_Helpers::get_target_market_countries();
-                    $country_key = strtolower($product_data['TargetMarketCountry']);
-                    if (isset($countries[$country_key])) {
-                        $product_data['TargetMarketCountry'] = $countries[$country_key];
+                // VALIDATE against Reference Data - REJECT invalid values
+                $validation_errors = [];
+
+                // Validate PackagingType
+                if (isset($product_data['PackagingType'])) {
+                    $packaging_types = GS1_GTIN_Database::get_reference_data('packaging', true);
+                    $valid = false;
+                    foreach ($packaging_types as $pt) {
+                        if ($pt->value_nl === $product_data['PackagingType']) {
+                            $valid = true;
+                            break;
+                        }
+                    }
+                    if (!$valid) {
+                        $validation_errors[] = "Verpakkingstype '{$product_data['PackagingType']}' is niet geldig";
                     }
                 }
-                
-                if (isset($product_data['ConsumerUnit'])) {
-                    $product_data['ConsumerUnit'] = GS1_GTIN_Helpers::convert_boolean($product_data['ConsumerUnit']);
+
+                // Validate MeasurementUnit
+                if (isset($product_data['MeasurementUnit'])) {
+                    $measurement_units = GS1_GTIN_Database::get_reference_data('measurement', true);
+                    $valid = false;
+                    foreach ($measurement_units as $mu) {
+                        if ($mu->value_nl === $product_data['MeasurementUnit']) {
+                            $valid = true;
+                            break;
+                        }
+                    }
+                    if (!$valid) {
+                        $validation_errors[] = "Maateenheid '{$product_data['MeasurementUnit']}' is niet geldig";
+                    }
+                }
+
+                // If validation errors, SKIP this product
+                if (!empty($validation_errors)) {
+                    GS1_GTIN_Logger::log('Validation failed for product ' . $product_id, 'error', $validation_errors);
+                    continue;
                 }
                 
-                if (isset($product_data['Status'])) {
-                    $product_data['Status'] = GS1_GTIN_Helpers::convert_status($product_data['Status']);
-                }
+                // Sanitize user-edited values (keep PascalCase)
+if (isset($product_data['Language'])) {
+    $product_data['Language'] = GS1_GTIN_Helpers::convert_language_code($product_data['Language']);
+}
+
+if (isset($product_data['TargetMarketCountry'])) {
+    $countries = GS1_GTIN_Helpers::get_target_market_countries();
+    $country_key = strtolower($product_data['TargetMarketCountry']);
+    if (isset($countries[$country_key])) {
+        $product_data['TargetMarketCountry'] = $countries[$country_key];
+    }
+}
+
+// NIET MEER CONVERTEREN! ConsumerUnit is al "Ja" uit prepare_registration_data()
+// if (isset($product_data['ConsumerUnit'])) {
+//     $product_data['ConsumerUnit'] = GS1_GTIN_Helpers::convert_boolean($product_data['ConsumerUnit']);
+// }
+
+if (isset($product_data['Status'])) {
+    $product_data['Status'] = GS1_GTIN_Helpers::convert_status($product_data['Status']);
+}
                 
                 // Ensure NetContent is integer
                 if (isset($product_data['NetContent'])) {
                     $product_data['NetContent'] = intval($product_data['NetContent']);
                 }
                 
-                // Ensure MeasurementUnit has English translation
-                if (isset($product_data['MeasurementUnit']) && strpos($product_data['MeasurementUnit'], '(') === false) {
-                    $product_data['MeasurementUnit'] .= ' (piece)'; // Add default English
-                }
+                // GS1 wil ALLEEN Nederlands, GEEN Engels!
+// Verwijder Engels als het er is
+if (isset($product_data['MeasurementUnit'])) {
+    // Verwijder alles na spatie en haakje: "Paar (pair)" → "Paar"
+    $parts = explode(' (', $product_data['MeasurementUnit']);
+    $product_data['MeasurementUnit'] = $parts[0];
+}
                 
                 $product_data['Index'] = $index;
                 $product_data['Gtin'] = $assignment->gtin; // 12 digits ZONDER checkdigit
@@ -458,9 +594,13 @@ foreach ($product_ids as $product_id) {
                 }
                 
                 // Remove checkdigit if GS1 added it (we store 12 digits)
-                $gtin = strlen($product['gtin']) === 13 
-                    ? GS1_GTIN_Helpers::remove_checkdigit($product['gtin'])
-                    : $product['gtin'];
+                // GS1 stuurt GTIN MET leading zero: "08721472560008" (14 chars!)
+$gtin = $product['gtin'];
+// Strip leading zeros en checkdigit
+$gtin = ltrim($gtin, '0'); // "8721472560008" (13 chars)
+if (strlen($gtin) === 13) {
+    $gtin = substr($gtin, 0, 12); // "872147256000" (12 chars)
+}
                 
                 // Find assignment by GTIN
                 global $wpdb;

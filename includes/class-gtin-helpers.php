@@ -83,49 +83,58 @@ class GS1_GTIN_Helpers {
     }
     
     /**
-     * Get measurement unit mappings
+     * Get measurement unit mappings from database
      * 
-     * @return array Measurement units for GS1 API
+     * @return array Measurement units for GS1 API (format: "Nederlands (english)")
      */
     public static function get_measurement_units() {
-        return [
-            'stuks' => 'Stuks',
-            'paar' => 'Paar',
-            'sets' => 'Sets'
-        ];
+        $units = GS1_GTIN_Database::get_reference_data('measurement', true);
+        
+        $result = [];
+        foreach ($units as $unit) {
+            $key = strtolower($unit->value_nl);
+            $result[$key] = $unit->value_nl . ' (' . $unit->value_en . ')';
+        }
+        
+        return $result;
     }
     
     /**
-     * Get packaging type mappings
+     * Get packaging type mappings from database
      * 
      * @return array Packaging types for GS1 API
      */
     public static function get_packaging_types() {
-        return [
-            'doos' => 'Doos',
-            'zak' => 'Zak',
-            'niet_verpakt' => 'Niet verpakt',
-            'pot' => 'Pot',
-            'hoesje' => 'Hoesje',
-            'blister' => 'Blisterverpakking',
-            'kaart' => 'Kaart',
-            'tube' => 'Tube',
-            'overig' => 'Zak' // Default
-        ];
+        $types = GS1_GTIN_Database::get_reference_data('packaging', true);
+        
+        $result = [];
+        foreach ($types as $type) {
+            $key = strtolower(str_replace(' ', '_', $type->value_nl));
+            $result[$key] = $type->value_nl;
+        }
+        
+        if (!isset($result['overig'])) {
+            $result['overig'] = 'Zak';
+        }
+        
+        return $result;
     }
     
     /**
-     * Get target market countries
+     * Get target market countries from database
      * 
-     * @return array Countries for GS1 API
+     * @return array Countries for GS1 API (key = code, value = Dutch name)
      */
     public static function get_target_market_countries() {
-        return [
-            'eu' => 'Europese Unie',
-            'nl' => 'Nederland',
-            'be' => 'België',
-            'de' => 'Duitsland'
-        ];
+        $countries = GS1_GTIN_Database::get_reference_data('country', true);
+        
+        $result = [];
+        foreach ($countries as $country) {
+            $key = strtolower($country->code);
+            $result[$key] = $country->value_nl;
+        }
+        
+        return $result;
     }
     
     /**

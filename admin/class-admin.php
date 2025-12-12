@@ -30,6 +30,13 @@ class GS1_GTIN_Admin {
         add_action('wp_ajax_gs1_reset_last_used', [$this, 'ajax_reset_last_used']);
         add_action('wp_ajax_gs1_set_last_used', [$this, 'ajax_set_last_used']);
         add_action('wp_ajax_gs1_check_registration', [$this, 'ajax_check_registration']);
+        add_action('wp_ajax_gs1_get_registration_details', [$this, 'ajax_get_registration_details']);
+        add_action('wp_ajax_gs1_check_database', [$this, 'ajax_check_database']);
+        add_action('wp_ajax_gs1_fix_database', [$this, 'ajax_fix_database']);
+        add_action('wp_ajax_gs1_save_reference_data', [$this, 'ajax_save_reference_data']);
+        add_action('wp_ajax_gs1_delete_reference_data', [$this, 'ajax_delete_reference_data']);
+        add_action('wp_ajax_gs1_set_default_reference', [$this, 'ajax_set_default_reference']);
+        add_action('wp_ajax_gs1_get_measurement_units', [$this, 'ajax_get_measurement_units']);
     }
     
     public function add_menu_pages() {
@@ -108,6 +115,10 @@ class GS1_GTIN_Admin {
                    class="nav-tab <?php echo $tab === 'settings' ? 'nav-tab-active' : ''; ?>">
                     Instellingen
                 </a>
+                <a href="?post_type=product&page=gs1-gtin-manager&tab=reference-data" 
+                   class="nav-tab <?php echo $tab === 'reference-data' ? 'nav-tab-active' : ''; ?>">
+                    Reference Data
+                </a>
             </nav>
             
             <div class="tab-content">
@@ -124,6 +135,9 @@ class GS1_GTIN_Admin {
                         break;
                     case 'logs':
                         $this->render_logs_tab();
+                        break;
+                    case 'reference-data':
+                        $this->render_reference_data_tab();
                         break;
                     case 'settings':
                         $settings = new GS1_GTIN_Settings();
@@ -150,6 +164,10 @@ class GS1_GTIN_Admin {
     
     private function render_logs_tab() {
         include GS1_GTIN_PLUGIN_DIR . 'admin/views/logs.php';
+    }
+    
+    private function render_reference_data_tab() {
+        include GS1_GTIN_PLUGIN_DIR . 'admin/views/reference-data.php';
     }
     
     // AJAX handlers
@@ -601,6 +619,158 @@ public function ajax_submit_registration() {
         } else {
             wp_send_json_error($result);
         }
+    }
+    
+    public function ajax_get_registration_details() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        $invocation_id = isset($_POST['invocation_id']) ? sanitize_text_field($_POST['invocation_id']) : '';
+        
+        if (empty($invocation_id)) {
+            wp_send_json_error(['message' => 'Geen invocation ID']);
+        }
+        
+        $invocation_id = trim($invocation_id, '"');
+        
+        $api = new GS1_GTIN_API_Client();
+        $result = $api->get_registration_results($invocation_id);
+        
+        if ($result['success']) {
+            wp_send_json_success($result['data']);
+        } else {
+            wp_send_json_error($result);
+        }
+    }
+    
+public function ajax_check_database() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        global $wpdb;
+        
+        $tables = [
+            'gs1_gtin_assignments' => 'GTIN Assignments',
+            'gs1_gtin_ranges' => 'GTIN Ranges',
+            'gs1_gtin_logs' => 'Logs',
+            'gs1_gtin_gpc_mappings' => 'GPC Mappings',
+            'gs1_gtin_reference_data' => 'Reference Data'
+        ];
+        
+        $status = [];
+        $missing = [];
+        
+        foreach ($tables as $table => $name) {
+            $full_table = $wpdb->prefix . $table;
+            $exists = $wpdb->get_var("SHOW TABLES LIKE '{$full_table}'") === $full_table;
+            
+            $status[$name] = $exists;
+            if (!$exists) {
+                $missing[] = $name;
+            }
+        }
+        
+        if (empty($missing)) {
+            wp_send_json_success([
+                'message' => '✓ Alle tabellen bestaan',
+                'status' => $status
+            ]);
+        } else {
+            wp_send_json_error([
+                'message' => '⚠️ Ontbrekende tabellen: ' . implode(', ', $missing),
+                'status' => $status,
+                'missing' => $missing
+            ]);
+        }
+    }
+    
+    public function ajax_fix_database() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        require_once GS1_GTIN_PLUGIN_DIR . 'includes/class-database.php';
+        
+        GS1_GTIN_Database::create_tables();
+        
+        GS1_GTIN_Logger::log('Database tables recreated via admin', 'info');
+        
+        wp_send_json_success([
+            'message' => '✓ Database tabellen aangemaakt/bijgewerkt'
+        ]);
+    }
+    
+    public function ajax_save_reference_data() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        $id = isset($_POST['id']) ? intval($_POST['id']) : 0;
+        $category = isset($_POST['category']) ? sanitize_text_field($_POST['category']) : '';
+        $value_nl = isset($_POST['value_nl']) ? sanitize_text_field($_POST['value_nl']) : '';
+        $value_en = isset($_POST['value_en']) ? sanitize_text_field($_POST['value_en']) : '';
+        $code = isset($_POST['code']) ? sanitize_text_field($_POST['code']) : null;
+        $is_active = isset($_POST['is_active']) ? 1 : 0;
+        
+        if (empty($category) || empty($value_nl) || empty($value_en)) {
+            wp_send_json_error(['message' => 'Alle velden behalve Code zijn verplicht']);
+        }
+        
+        $data = [
+            'category' => $category,
+            'value_nl' => $value_nl,
+            'value_en' => $value_en,
+            'code' => $code,
+            'is_active' => $is_active
+        ];
+        
+        if ($id) {
+            $data['id'] = $id;
+        }
+        
+        $result_id = GS1_GTIN_Database::save_reference_data($data);
+        
+        GS1_GTIN_Logger::log("Reference data saved: {$category} - {$value_nl}", 'info');
+        
+        wp_send_json_success([
+            'message' => 'Reference data opgeslagen',
+            'id' => $result_id
+        ]);
+    }
+    
+    public function ajax_delete_reference_data() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        $id = isset($_POST['id']) ? intval($_POST['id']) : 0;
+        
+        if (!$id) {
+            wp_send_json_error(['message' => 'Geen ID opgegeven']);
+        }
+        
+        GS1_GTIN_Database::delete_reference_data($id);
+        
+        GS1_GTIN_Logger::log("Reference data deleted: ID {$id}", 'info');
+        
+        wp_send_json_success(['message' => 'Reference data verwijderd']);
+    }
+    
+    public function ajax_set_default_reference() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        $id = isset($_POST['id']) ? intval($_POST['id']) : 0;
+        $category = isset($_POST['category']) ? sanitize_text_field($_POST['category']) : '';
+        
+        if (!$id || !$category) {
+            wp_send_json_error(['message' => 'ID en category zijn verplicht']);
+        }
+        
+        update_option('gs1_default_' . $category, $id);
+        
+        GS1_GTIN_Logger::log("Default reference set: {$category} = {$id}", 'info');
+        
+        wp_send_json_success(['message' => 'Standaard ingesteld']);
+    }
+    
+    public function ajax_get_measurement_units() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        $units = GS1_GTIN_Database::get_reference_data('measurement', true);
+        
+        wp_send_json_success(['units' => $units]);
     }
 }
 
