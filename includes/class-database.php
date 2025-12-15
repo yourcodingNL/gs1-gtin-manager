@@ -321,17 +321,35 @@ class GS1_GTIN_Database {
             
             return $existing->id;
         } else {
-            $wpdb->insert(
-                $table,
-                $data,
-                ['%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d']
+    // NIEUWE CODE: Check of GTIN al bestaat bij ander product
+    if (!empty($data['gtin'])) {
+        $gtin_exists = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$table} WHERE gtin = %s AND product_id != %d",
+            $data['gtin'],
+            $data['product_id']
+        ));
+        
+        if ($gtin_exists) {
+            GS1_GTIN_Logger::log(
+                "GTIN {$data['gtin']} already assigned to product {$gtin_exists->product_id}. Skipping.",
+                'error'
             );
-            
-            GS1_GTIN_Logger::log_gtin_assignment($data['product_id'], $data['gtin'], 'created');
-            
-            return $wpdb->insert_id;
+            return false;
         }
     }
+    
+    $wpdb->insert(
+        $table,
+        $data,
+        ['%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d']
+    );
+    
+    GS1_GTIN_Logger::log_gtin_assignment($data['product_id'], $data['gtin'], 'created');
+    
+    return $wpdb->insert_id;
+}
+}
+            
     
     /**
      * Get GTIN ranges

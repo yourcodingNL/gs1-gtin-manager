@@ -427,12 +427,10 @@ foreach ($product_ids as $product_id) {
             if (!$assignment || $assignment->external_registration) {
                 continue;
             }
-            // SKIP als product al registered is
-if ($assignment->status === 'registered') {
-    GS1_GTIN_Logger::log("Product {$product_id} already registered, re-registering with same GTIN", 'info');
-}
+         
             // Use provided data or prepare from product
             if (isset($registration_data[$product_id])) {
+                
                 $product_data = $registration_data[$product_id];
                 
                 // VALIDATE against Reference Data - REJECT invalid values
@@ -550,18 +548,40 @@ if (isset($product_data['MeasurementUnit'])) {
         }
         
         // Update assignments
-        foreach ($product_ids as $product_id) {
-            $assignment = GS1_GTIN_Database::get_gtin_assignment($product_id);
-            if ($assignment && !$assignment->external_registration) {
-                GS1_GTIN_Database::save_gtin_assignment([
-                    'product_id' => $product_id,
-                    'gtin' => $assignment->gtin, // Keep 12 digits in DB
-                    'contract_number' => $assignment->contract_number,
-                    'status' => 'pending_registration',
-                    'invocation_id' => $invocation_id
-                ]);
+foreach ($product_ids as $product_id) {
+    $assignment = GS1_GTIN_Database::get_gtin_assignment($product_id);
+    if ($assignment && !$assignment->external_registration) {
+        $update_data = [
+            'product_id' => $product_id,
+            'gtin' => $assignment->gtin,
+            'contract_number' => $assignment->contract_number,
+            'status' => 'pending_registration',
+            'invocation_id' => $invocation_id
+        ];
+        
+        // Sla user input uit modal op
+        if (isset($registration_data[$product_id])) {
+            $user_data = $registration_data[$product_id];
+            
+            if (isset($user_data['PackagingType'])) {
+                $update_data['packaging_type'] = $user_data['PackagingType'];
+            }
+            if (isset($user_data['MeasurementUnit'])) {
+                // Verwijder Engels deel: "Paar (pair)" → "Paar"
+                $parts = explode(' (', $user_data['MeasurementUnit']);
+                $update_data['measurement_unit'] = $parts[0];
+            }
+            if (isset($user_data['NetContent'])) {
+                $update_data['net_content'] = intval($user_data['NetContent']);
+            }
+            if (isset($user_data['Gpc'])) {
+                $update_data['gpc_code'] = $user_data['Gpc'];
             }
         }
+        
+        GS1_GTIN_Database::save_gtin_assignment($update_data);
+    }
+}
         
         GS1_GTIN_Logger::log_registration($invocation_id, count($products), 'initiated');
         
