@@ -241,6 +241,21 @@ public static function update_gtin_at_gs1($product_id, $update_data = [], $force
         ];
     }
     
+    // CRITICAL: Force 13-digit GTIN (GS1 needs checkdigit to recognize existing GTIN)
+    $gtin13 = GS1_GTIN_Helpers::add_checkdigit($assignment->gtin);
+    $product_data['Gtin'] = $gtin13;
+    
+    GS1_GTIN_Logger::log("⚠️ UPDATE: GTIN forced to {$gtin13} (was: {$assignment->gtin})", 'warning');
+    
+    // Verify it was actually set
+    if ($product_data['Gtin'] !== $gtin13) {
+        GS1_GTIN_Logger::log("❌ CRITICAL: GTIN override FAILED!", 'error');
+        return [
+            'success' => false,
+            'error' => 'GTIN override failed - would create new GTIN'
+        ];
+    }
+    
     // Override with user updates
     if (!empty($update_data)) {
         foreach ($update_data as $key => $value) {
