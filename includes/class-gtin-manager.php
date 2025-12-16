@@ -141,7 +141,152 @@ class GS1_GTIN_Manager {
         
 return $results;
     }
+    /**
+ * Assign manual GTIN to product
+ */
+public static function assign_manual_gtin($product_id, $gtin12, $is_external = false) {
+    // Check if already has GTIN
+    $existing = GS1_GTIN_Database::get_gtin_assignment($product_id);
+    if ($existing) {
+        return [
+            'success' => false,
+            'error' => 'Product heeft al een GTIN toegewezen'
+        ];
+    }
     
+    // Validate GTIN is 12 digits
+    if (strlen($gtin12) !== 12 || !ctype_digit($gtin12)) {
+        return [
+            'success' => false,
+            'error' => 'GTIN moet exact 12 cijfers zijn'
+        ];
+    }
+    
+    // Check if GTIN exists for other product
+    $existing_gtin = GS1_GTIN_Database::get_gtin_assignment_by_gtin($gtin12);
+    if ($existing_gtin) {
+        return [
+            'success' => false,
+            'error' => "GTIN {$gtin12} is al toegewezen aan product {$existing_gtin->product_id}"
+        ];
+    }
+    
+    // Get product
+    $product = wc_get_product($product_id);
+    if (!$product) {
+        return [
+            'success' => false,
+            'error' => 'Product niet gevonden'
+        ];
+    }
+    
+    // Prepare data
+    $data = [
+        'product_id' => $product_id,
+        'gtin' => $gtin12,
+        'contract_number' => null, // Manual GTIN has no contract
+        'status' => $is_external ? 'external' : 'pending',
+        'external_registration' => $is_external ? 1 : 0
+    ];
+    
+    $assignment_id = GS1_GTIN_Database::save_gtin_assignment($data);
+    
+    GS1_GTIN_Logger::log(
+        "Manual GTIN assigned: Product {$product_id} → {$gtin12}" . ($is_external ? ' (external)' : ''),
+        'info'
+    );
+    
+    // Calculate checkdigit for display
+    $gtin13_display = GS1_GTIN_Helpers::add_checkdigit($gtin12);
+    
+    return [
+        'success' => true,
+        'gtin' => $gtin12,
+        'gtin_display' => $gtin13_display,
+        'assignment_id' => $assignment_id
+    ];
+}
+
+/**
+ * Update GTIN data at GS1 (re-register with same GTIN)
+ */
+public static function update_gtin_at_gs1($product_id, $update_data = [], $force_update = false) {
+    // Get assignment
+    $assignment = GS1_GTIN_Database::get_gtin_assignment($product_id);
+    if (!$assignment) {
+        return [
+            'success' => false,
+            'error' => 'Product heeft geen GTIN'
+        ];
+    }
+    
+    if ($assignment->external_registration && !$force_update) {
+        return [
+            'success' => false,
+            'error' => 'Kan externe GTIN niet updaten bij GS1 (gebruik force update)'
+        ];
+    }
+    
+    if ($force_update) {
+        GS1_GTIN_Logger::log("⚠️ FORCE UPDATE: Updating external GTIN at GS1 for product {$product_id}", 'warning');
+    }
+    
+    // Prepare registration data (reuse existing function)
+    $product_data = self::prepare_registration_data($product_id);
+    
+    if (!$product_data) {
+        return [
+            'success' => false,
+            'error' => 'Kon registratiedata niet voorbereiden'
+        ];
+    }
+    
+    // Override with user updates
+    if (!empty($update_data)) {
+        foreach ($update_data as $key => $value) {
+            if (isset($product_data[$key])) {
+                $product_data[$key] = $value;
+            }
+        }
+    }
+    
+    // Set Index for API
+    $product_data['Index'] = 1;
+    
+    // Register (API will update if exists)
+    $api = new GS1_GTIN_API_Client();
+    $result = $api->register_gtin_products([$product_data]);
+    
+    if (!$result['success']) {
+        GS1_GTIN_Logger::log('Update failed for product ' . $product_id, 'error', $result);
+        return $result;
+    }
+    
+    // Get invocation ID
+    $invocation_id = $result['data'];
+    
+    // Update assignment
+    GS1_GTIN_Database::save_gtin_assignment([
+        'product_id' => $product_id,
+        'gtin' => $assignment->gtin,
+        'contract_number' => $assignment->contract_number,
+        'status' => 'pending_registration',
+        'invocation_id' => $invocation_id,
+        'error_message' => null
+    ]);
+    
+    GS1_GTIN_Logger::log(
+        "GTIN update initiated: Product {$product_id}, GTIN {$assignment->gtin}, Invocation {$invocation_id}",
+        'info'
+    );
+    
+    return [
+        'success' => true,
+        'invocation_id' => $invocation_id,
+        'message' => 'Update gestart bij GS1'
+    ];
+}
+
     /**
      * Get target market country from Reference Data
      */

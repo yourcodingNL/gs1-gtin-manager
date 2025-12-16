@@ -31,6 +31,7 @@ class GS1_GTIN_Admin {
         add_action('wp_ajax_gs1_set_last_used', [$this, 'ajax_set_last_used']);
         add_action('wp_ajax_gs1_check_registration', [$this, 'ajax_check_registration']);
         add_action('wp_ajax_gs1_get_registration_details', [$this, 'ajax_get_registration_details']);
+        add_action('wp_ajax_gs1_update_gtin_data', [$this, 'ajax_update_gtin_data']);
         add_action('wp_ajax_gs1_check_database', [$this, 'ajax_check_database']);
         add_action('wp_ajax_gs1_fix_database', [$this, 'ajax_fix_database']);
         add_action('wp_ajax_gs1_save_reference_data', [$this, 'ajax_save_reference_data']);
@@ -342,9 +343,10 @@ class GS1_GTIN_Admin {
                     'external' => $assignment->external_registration
                 ]);
                 
+                // Skip external UNLESS user explicitly wants to re-register via force update
                 if ($assignment->external_registration) {
-                    GS1_GTIN_Logger::log("Product {$product_id} is external registration, skipping", 'info');
-                    continue;
+                    GS1_GTIN_Logger::log("Product {$product_id} is external registration, will be included for re-registration", 'info');
+                    // DON'T skip - let it through for re-registration
                 }
                 
                 GS1_GTIN_Logger::log("Preparing registration data for product {$product_id}", 'debug');
@@ -642,6 +644,78 @@ public function ajax_submit_registration() {
         }
     }
     
+public function ajax_update_gtin_data() {
+    check_ajax_referer('gs1_gtin_nonce', 'nonce');
+    
+    $product_id = isset($_POST['product_id']) ? intval($_POST['product_id']) : 0;
+    $gtin = isset($_POST['gtin']) ? sanitize_text_field($_POST['gtin']) : '';
+    $is_external = isset($_POST['is_external']) ? (bool) $_POST['is_external'] : false;
+    $update_data = isset($_POST['update_data']) ? $_POST['update_data'] : [];
+    $force_update = isset($_POST['force_update']) ? (bool) $_POST['force_update'] : false;
+    
+    if (!$product_id) {
+        wp_send_json_error(['message' => 'Geen product ID']);
+    }
+    
+    if (empty($gtin)) {
+        wp_send_json_error(['message' => 'GTIN is verplicht']);
+    }
+    
+    // Normalize GTIN to 12 digits
+    $gtin_clean = preg_replace('/[^0-9]/', '', $gtin);
+    if (strlen($gtin_clean) === 13) {
+        $gtin12 = substr($gtin_clean, 0, 12);
+    } elseif (strlen($gtin_clean) === 12) {
+        $gtin12 = $gtin_clean;
+    } else {
+        wp_send_json_error(['message' => 'GTIN moet 12 of 13 cijfers zijn']);
+    }
+    
+    // Get current assignment
+    $assignment = GS1_GTIN_Database::get_gtin_assignment($product_id);
+    
+    if (!$assignment) {
+        wp_send_json_error(['message' => 'Product heeft nog geen GTIN assignment']);
+    }
+    
+    // Check if trying to change GTIN
+    if ($assignment->gtin !== $gtin12) {
+        wp_send_json_error(['message' => 'Kan GTIN niet wijzigen']);
+    }
+    
+    // Log force update
+    if ($force_update) {
+        GS1_GTIN_Logger::log("⚠️ FORCE UPDATE enabled for product {$product_id}", 'warning');
+    }
+    
+    // Skip if external (unless forced)
+    if ($assignment->external_registration && !$force_update) {
+        GS1_GTIN_Logger::log("Product {$product_id} is external, skipping (not forced)", 'info');
+        wp_send_json_error(['message' => 'Externe GTINs kunnen niet worden bijgewerkt (vink Force Update aan)']);
+    }
+    
+    // Update external status
+    GS1_GTIN_Database::save_gtin_assignment([
+        'product_id' => $product_id,
+        'gtin' => $gtin12,
+        'external_registration' => $is_external ? 1 : 0,
+        'status' => $is_external ? 'external' : $assignment->status
+    ]);
+    
+   // Update at GS1 if not external OR if force update
+    if ((!$is_external || $force_update) && !empty($update_data)) {
+        $gs1_result = GS1_GTIN_Manager::update_gtin_at_gs1($product_id, $update_data, $force_update);
+        
+        if ($gs1_result['success']) {
+            wp_send_json_success(['message' => 'GTIN data bijgewerkt bij GS1']);
+        } else {
+            wp_send_json_error(['message' => $gs1_result['error']]);
+        }
+    } else {
+        wp_send_json_success(['message' => 'GTIN metadata bijgewerkt']);
+    }
+}
+
 public function ajax_check_database() {
         check_ajax_referer('gs1_gtin_nonce', 'nonce');
         

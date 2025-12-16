@@ -93,10 +93,13 @@ $brands = get_terms([
         </div>
     </div>
     
-    <!-- Actions -->
+   <!-- Actions -->
     <div class="gs1-actions">
         <button type="button" id="gs1-assign-selected" class="button button-primary" disabled>
             GTIN Toewijzen aan Geselecteerde
+        </button>
+        <button type="button" id="gs1-update-gtin" class="button button-primary" disabled>
+            📝 Update GTIN Data
         </button>
         <button type="button" id="gs1-unassign-selected" class="button" disabled>
             ❌ GTIN Verwijderen
@@ -199,8 +202,98 @@ $brands = get_terms([
             </button>
         </div>
     </div>
-</div>
 
+</div>
+<!-- Update GTIN Modal -->
+<div id="gs1-update-modal" class="gs1-modal" style="display:none;">
+    <div class="gs1-modal-content" style="max-width: 800px;">
+        <div class="gs1-modal-header">
+            <h2>GTIN Data Bijwerken</h2>
+            <button type="button" class="gs1-modal-close">×</button>
+        </div>
+        
+        <div class="gs1-modal-body">
+            <div id="gs1-update-product-info" style="background: #f0f6fc; border-left: 4px solid #2271b1; padding: 15px; margin-bottom: 20px;">
+                <!-- Product info loaded here -->
+            </div>
+            
+            <table class="form-table">
+                <tr>
+                    <th>GTIN (13 cijfers):</th>
+                    <td>
+                        <input type="text" id="gs1-update-gtin-input" class="regular-text" 
+                               placeholder="8721472560001" maxlength="13">
+                        <p class="description">
+                            <span id="gs1-gtin-status"></span>
+                        </p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Type:</th>
+                    <td>
+                        <label>
+                            <input type="checkbox" id="gs1-update-external">
+                            Dit is een externe GTIN (niet uit onze range)
+                        </label>
+                    </td>
+                </tr>
+                <tr id="gs1-force-update-row" style="display:none;">
+    <th></th>
+    <td>
+        <label style="color: #d63638;">
+            <input type="checkbox" id="gs1-force-update">
+            <strong>⚠️ Force GS1 Update (negeer externe status)</strong>
+        </label>
+        <p class="description" style="color: #d63638;">
+            Let op: Dit forceert een update bij GS1, ook al is dit een externe GTIN.
+        </p>
+    </td>
+</tr>
+            </table>
+            
+            <div id="gs1-update-gs1-data" style="display:none;">
+                <h3>GS1 Data Bijwerken</h3>
+                <p class="description">Deze data wordt bijgewerkt bij GS1 Nederland.</p>
+                
+                <table class="form-table">
+                    <tr>
+                        <th>Beschrijving:</th>
+                        <td>
+                            <textarea id="gs1-update-description" class="large-text" rows="3" maxlength="300"></textarea>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>GPC Titel:</th>
+                        <td>
+                            <input type="text" id="gs1-update-gpc" class="regular-text">
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Verpakkingstype:</th>
+                        <td>
+                            <select id="gs1-update-packaging">
+                                <option value="Doos">Doos</option>
+                                <option value="Zak">Zak</option>
+                                <option value="Blister">Blister</option>
+                                <option value="Fles">Fles</option>
+                                <option value="Blik">Blik</option>
+                            </select>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+        
+        <div class="gs1-modal-footer">
+            <button type="button" class="button button-primary" id="gs1-update-save">
+                Opslaan
+            </button>
+            <button type="button" class="button" id="gs1-update-cancel">
+                Annuleren
+            </button>
+        </div>
+    </div>
+</div>
 <style>
 .gs1-overview-tab {
     margin-top: 20px;

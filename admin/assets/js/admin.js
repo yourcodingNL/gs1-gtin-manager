@@ -1,8 +1,13 @@
 /**
- * GS1 GTIN Manager - Admin JavaScript - FIXED UNASSIGN
+ * GS1 GTIN Manager - Admin JavaScript - FIXED: Better error handling
  * 
  * @package GS1_GTIN_Manager
  * @author YoCo - Sebastiaan Kalkman
+ * 
+ * CHANGELOG:
+ * - FIXED: Show detailed error messages when GTIN assignment fails
+ * - FIXED: Disable "GTIN Toewijzen" button for products that already have GTINs
+ * - IMPROVED: Better user feedback on duplicate assignment attempts
  */
 
 (function($) {
@@ -58,9 +63,23 @@
             $(document).on('click', '#gs1-select-all', (e) => this.selectAll(e));
             $(document).on('change', '.gs1-product-checkbox', () => this.updateSelection());
             $(document).on('click', '#gs1-assign-selected', () => this.assignGtins());
-            $(document).on('click', '#gs1-unassign-selected', () => this.unassignGtins()); // FIXED!
+            $(document).on('click', '#gs1-unassign-selected', () => this.unassignGtins());
             $(document).on('click', '#gs1-register-selected', () => this.startRegistration());
             $(document).on('click', '#gs1-mark-external', () => this.markExternal());
+            $(document).on('click', '#gs1-update-gtin', () => this.openUpdateModal());
+            $(document).on('click', '#gs1-update-cancel, #gs1-update-modal .gs1-modal-close', () => {
+                $('#gs1-update-modal').hide();
+            });
+            $(document).on('click', '#gs1-update-save', () => this.saveUpdate());
+            $(document).on('change', '#gs1-update-gtin-input', () => this.validateGtinInput());
+            $(document).on('change', '#gs1-update-external', (e) => {
+    if (e.target.checked) {
+        $('#gs1-update-gs1-data').hide();
+    } else {
+        $('#gs1-update-gs1-data').show();
+    }
+    // Force update blijft altijd zichtbaar als GTIN bestaat
+});
             $(document).on('click', '#gs1-prev-page', () => this.changePage(-1));
             $(document).on('click', '#gs1-next-page', () => this.changePage(1));
             $(document).on('keyup', '#gs1-search-input', _.debounce(() => this.applyFilters(), 500));
@@ -124,7 +143,7 @@
             });
             $(document).on('click', '.gs1-delete-gpc-mapping', (e) => this.deleteGpcMapping(e));
             
-            /// Database management
+            // Database management
             $(document).on('click', '.gs1-check-database', () => this.checkDatabase());
             $(document).on('click', '.gs1-fix-database', () => this.fixDatabase());
             
@@ -250,20 +269,46 @@
         updateSelection: function() {
             this.selectedProducts = [];
             let hasGtin = 0;
+            let noGtin = 0;
             
             $('.gs1-product-checkbox:checked').each((i, el) => {
                 this.selectedProducts.push(parseInt($(el).val()));
                 if ($(el).data('has-gtin') === 1) {
                     hasGtin++;
+                } else {
+                    noGtin++;
                 }
             });
             
             const hasSelection = this.selectedProducts.length > 0;
+            const singleSelection = this.selectedProducts.length === 1;
             
-            // Enable/disable buttons based on selection
-            $('#gs1-assign-selected').prop('disabled', !hasSelection);
-            $('#gs1-unassign-selected').prop('disabled', hasGtin === 0); // Only enable if has GTIN!
+            // ==========================================
+            // CRITICAL FIX: Smart button enabling
+            // ==========================================
+            
+            // "GTIN Toewijzen" button: Only enable for products WITHOUT GTIN
+            $('#gs1-assign-selected').prop('disabled', noGtin === 0);
+            
+            // Update button text to show what it will do
+            if (noGtin > 0 && hasGtin > 0) {
+                $('#gs1-assign-selected').text(`GTIN Toewijzen aan ${noGtin} producten (${hasGtin} worden genegeerd)`);
+            } else if (noGtin > 0) {
+                $('#gs1-assign-selected').text('GTIN Toewijzen aan Geselecteerde');
+            } else {
+                $('#gs1-assign-selected').text('GTIN Toewijzen (geen producten zonder GTIN geselecteerd)');
+            }
+            
+            // "UPDATE GTIN Data" button: Only enable for SINGLE selection
+            $('#gs1-update-gtin').prop('disabled', !singleSelection);
+            
+            // "GTIN Verwijderen" button: Only enable if has GTIN
+            $('#gs1-unassign-selected').prop('disabled', hasGtin === 0);
+            
+            // "Registreren" button: Only enable if has GTIN
             $('#gs1-register-selected').prop('disabled', hasGtin === 0);
+            
+            // "Markeer als Extern" button: Always enabled if selection
             $('#gs1-mark-external').prop('disabled', !hasSelection);
         },
         
@@ -272,13 +317,16 @@
             this.loadProducts();
         },
         
-        // GTIN Assignment
+        // ==========================================
+        // CRITICAL FIX: Better error handling
+        // ==========================================
         assignGtins: function() {
             if (this.selectedProducts.length === 0) return;
             
             if (!confirm(`GTIN toewijzen aan ${this.selectedProducts.length} producten?`)) return;
             
             const button = $('#gs1-assign-selected');
+            const originalText = button.text();
             button.prop('disabled', true).text('Toewijzen...');
             
             $.ajax({
@@ -293,23 +341,46 @@
                 success: (response) => {
                     if (response.success) {
                         const result = response.data;
-                        this.showSuccess(`${result.success.length} GTINs toegewezen. ${result.errors.length} fouten.`);
+                        
+                        // Show detailed message
+                        let message = `✅ ${result.success.length} GTINs toegewezen`;
+                        
+                        if (result.errors.length > 0) {
+                            message += `\n⚠️ ${result.errors.length} fouten:`;
+                            
+                            // Show first 3 errors in detail
+                            const errorsToShow = result.errors.slice(0, 3);
+                            errorsToShow.forEach(err => {
+                                message += `\n  - Product ${err.product_id}: ${err.error}`;
+                            });
+                            
+                            if (result.errors.length > 3) {
+                                message += `\n  ... en ${result.errors.length - 3} meer (check logs)`;
+                            }
+                            
+                            this.showWarning(message);
+                        } else {
+                            this.showSuccess(message);
+                        }
+                        
                         this.loadProducts();
                     } else {
                         this.showError(response.data.message);
                     }
                 },
+                error: (xhr, status, error) => {
+                    this.showError('Netwerkfout: ' + error);
+                },
                 complete: () => {
-                    button.prop('disabled', false).text('GTIN Toewijzen aan Geselecteerde');
+                    button.prop('disabled', false).text(originalText);
                 }
             });
         },
         
-        // FIXED: Unassign GTINs
         unassignGtins: function() {
             if (this.selectedProducts.length === 0) return;
             
-            if (!confirm(`Weet je zeker dat je ${this.selectedProducts.length} GTIN(s) wilt verwijderen? Dit kan NIET ongedaan worden gemaakt!`)) return;
+            if (!confirm(`⚠️ WAARSCHUWING: Je staat op het punt om ${this.selectedProducts.length} GTIN(s) te verwijderen!\n\nDit kan NIET ongedaan worden gemaakt!\n\nWeet je het zeker?`)) return;
             
             const button = $('#gs1-unassign-selected');
             button.prop('disabled', true).text('Verwijderen...');
@@ -339,27 +410,209 @@
             });
         },
         
-        markExternal: function() {
-            if (this.selectedProducts.length === 0) return;
+        // UPDATE GTIN Modal functions
+        openUpdateModal: function() {
+            if (this.selectedProducts.length !== 1) {
+                this.showError('Selecteer exact 1 product om bij te werken');
+                return;
+            }
             
-            if (!confirm(`${this.selectedProducts.length} producten markeren als extern geregistreerd?`)) return;
+            const productId = this.selectedProducts[0];
+            
+            // Get product data
+            const row = $(`.gs1-product-checkbox[value="${productId}"]`).closest('tr');
+            const productName = row.find('td:eq(1) strong').text();
+            const sku = row.find('td:eq(2)').text();
+            const currentGtin = row.find('td:eq(5)').text();
+            
+            // Show product info
+            $('#gs1-update-product-info').html(`
+                <strong>Product:</strong> ${productName}<br>
+                <strong>SKU:</strong> ${sku}
+            `);
+            
+           // Set current GTIN or empty
+            if (currentGtin && currentGtin !== '-') {
+                $('#gs1-update-gtin-input').val(currentGtin).prop('readonly', true);
+                $('#gs1-gtin-status').html('✅ Bestaande GTIN (kan niet worden gewijzigd)').css('color', '#00a32a');
+                $('#gs1-update-gs1-data').show();
+                $('#gs1-force-update-row').show(); // NIEUW: Toon force update row
+            } else {
+                $('#gs1-update-gtin-input').val('').prop('readonly', false);
+                $('#gs1-gtin-status').html('Vul een 13-cijferige GTIN in').css('color', '#646970');
+                $('#gs1-update-gs1-data').hide();
+                $('#gs1-force-update-row').hide(); // NIEUW: Verberg force update row
+            }
+            
+            
+            // Check if product is marked as external in the Actions column
+const isExternal = row.find('td:eq(7)').text().includes('Extern');
+$('#gs1-update-external').prop('checked', isExternal);
+
+// If external, hide GS1 data section
+if (isExternal) {
+    $('#gs1-update-gs1-data').hide();
+}
+            
+            // Load product data for GS1 update
+            this.loadProductDataForUpdate(productId);
+            
+            // Store product ID
+            $('#gs1-update-modal').data('product-id', productId);
+            
+            // Show modal
+            $('#gs1-update-modal').show();
+        },
+        
+        validateGtinInput: function() {
+            const gtin = $('#gs1-update-gtin-input').val().trim();
+            const statusSpan = $('#gs1-gtin-status');
+            
+            if (!gtin) {
+                statusSpan.html('Vul een GTIN in').css('color', '#646970');
+                return false;
+            }
+            
+            // Remove non-digits
+            const gtinClean = gtin.replace(/[^0-9]/g, '');
+            
+            if (gtinClean.length === 13) {
+                // Validate checkdigit
+                const isValid = this.validateCheckdigit(gtinClean);
+                
+                if (isValid) {
+                    statusSpan.html('✅ Checkdigit correct').css('color', '#00a32a');
+                    return true;
+                } else {
+                    statusSpan.html('❌ Checkdigit incorrect').css('color', '#d63638');
+                    return false;
+                }
+            } else if (gtinClean.length === 12) {
+                // Calculate and show checkdigit
+                const checkdigit = this.calculateCheckdigit(gtinClean);
+                const gtin13 = gtinClean + checkdigit;
+                statusSpan.html(`ℹ️ Met checkdigit: ${gtin13}`).css('color', '#2271b1');
+                return true;
+            } else {
+                statusSpan.html('❌ GTIN moet 12 of 13 cijfers zijn').css('color', '#d63638');
+                return false;
+            }
+        },
+        
+        validateCheckdigit: function(gtin13) {
+    if (gtin13.length !== 13) return false;
+    
+    const gtin12 = gtin13.substring(0, 12);
+    const providedCheck = parseInt(gtin13[12]);
+    
+    // Calculate just the checkdigit (not the full 13-digit GTIN)
+    let sum_odd = 0;
+    let sum_even = 0;
+    
+    for (let i = 0; i < 12; i++) {
+        if (i % 2 === 0) {
+            sum_odd += parseInt(gtin12[i]);
+        } else {
+            sum_even += parseInt(gtin12[i]);
+        }
+    }
+    
+    let total = sum_odd + (sum_even * 3);
+    let calculatedCheck = (10 - (total % 10)) % 10;
+    
+    return providedCheck === calculatedCheck;
+},
+        loadProductDataForUpdate: function(productId) {
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_get_registration_data',
+                    nonce: gs1GtinAdmin.nonce,
+                    product_ids: [productId]
+                },
+                success: (response) => {
+                    if (response.success && response.data.products.length > 0) {
+                        const product = response.data.products[0];
+                        const data = product.data;
+                        
+                        // Fill form
+                        $('#gs1-update-description').val(data.Description || '');
+                        $('#gs1-update-gpc').val(data.Gpc || '');
+                        $('#gs1-update-packaging').val(data.PackagingType || 'Doos');
+                    }
+                }
+            });
+        },
+        
+        saveUpdate: function() {
+            const productId = $('#gs1-update-modal').data('product-id');
+            const gtin = $('#gs1-update-gtin-input').val().trim();
+            const isExternal = $('#gs1-update-external').is(':checked');
+            
+            if (!productId) {
+                this.showError('Geen product geselecteerd');
+                return;
+            }
+            
+            if (!gtin) {
+                this.showError('GTIN is verplicht');
+                return;
+            }
+            
+            // Validate GTIN
+            if (!this.validateGtinInput()) {
+                this.showError('GTIN is niet geldig');
+                return;
+            }
+            
+            // Confirm
+            const gtinClean = gtin.replace(/[^0-9]/g, '');
+            const gtin13 = gtinClean.length === 12 ? this.calculateCheckdigit(gtinClean) + gtinClean : gtinClean;
+            
+            if (!$('#gs1-update-gtin-input').prop('readonly')) {
+                if (!confirm(`⚠️ Weet je zeker dat GTIN ${gtin13} correct is?\n\nDit kan niet ongedaan worden gemaakt!`)) {
+                    return;
+                }
+            }
+            
+            const button = $('#gs1-update-save');
+            button.prop('disabled', true).text('Opslaan...');
+            
+            // Prepare update data
+            const updateData = {};
+            if (!isExternal) {
+                updateData.Description = $('#gs1-update-description').val();
+                updateData.Gpc = $('#gs1-update-gpc').val();
+                updateData.PackagingType = $('#gs1-update-packaging').val();
+            }
             
             $.ajax({
                 url: gs1GtinAdmin.ajaxUrl,
                 type: 'POST',
                 data: {
-                    action: 'gs1_assign_gtins',
+                    action: 'gs1_update_gtin_data',
                     nonce: gs1GtinAdmin.nonce,
-                    product_ids: this.selectedProducts,
-                    external: true
+                    product_id: productId,
+                    gtin: gtin,
+                    is_external: isExternal,
+                    update_data: updateData,
+                    force_update: $('#gs1-force-update').is(':checked')
                 },
                 success: (response) => {
                     if (response.success) {
-                        this.showSuccess('Producten gemarkeerd als extern');
+                        this.showSuccess(response.data.message);
+                        $('#gs1-update-modal').hide();
                         this.loadProducts();
                     } else {
                         this.showError(response.data.message);
                     }
+                },
+                error: () => {
+                    this.showError('Netwerkfout');
+                },
+                complete: () => {
+                    button.prop('disabled', false).text('Opslaan');
                 }
             });
         },
@@ -401,33 +654,26 @@
             });
         },
         
-       renderRegistrationStep1: function() {
-        // Check if any products are already registered
-        const hasRegistered = this.registrationData.some(p => {
-            // Check assignment table via AJAX would be better, but check Status for now
-            return false; // We'll get this from backend
-        });
-        
-        const html = this.registrationData.map((product) => {
-            let gtinDisplay = product.data.Gtin || '-';
+        renderRegistrationStep1: function() {
+            const html = this.registrationData.map((product) => {
+                let gtinDisplay = product.data.Gtin || '-';
+                
+                return `
+                    <div class="gs1-registration-product-item">
+                        <strong>${product.product_name}</strong> (SKU: ${product.sku})<br>
+                        <small>GTIN: ${gtinDisplay} | Merk: ${product.data.BrandName || '-'}</small>
+                    </div>
+                `;
+            }).join('');
             
-            return `
-                <div class="gs1-registration-product-item">
-                    <strong>${product.product_name}</strong> (SKU: ${product.sku})<br>
-                    <small>GTIN: ${gtinDisplay} | Merk: ${product.data.BrandName || '-'}</small>
-                </div>
-            `;
-        }).join('');
-        
-        $('#gs1-registration-products-list').html(html);
-    },
+            $('#gs1-registration-products-list').html(html);
+        },
         
         nextRegistrationStep: function() {
             if (this.registrationStep === 1) {
                 this.showRegistrationStep(2);
                 this.renderRegistrationStep2();
             } else if (this.registrationStep === 2) {
-                // Validate and show confirmation
                 if (!this.validateRegistrationData()) {
                     return;
                 }
@@ -514,11 +760,11 @@
                                        placeholder="Bijv: 1">
                             </div>
                             <div class="gs1-form-group">
-                            <label>Maateenheid</label>
-                            <select data-index="${index}" data-field="MeasurementUnit" class="gs1-measurement-select">
-                                <option value="">Laden...</option>
-                            </select>
-                        </div>
+                                <label>Maateenheid</label>
+                                <select data-index="${index}" data-field="MeasurementUnit" class="gs1-measurement-select">
+                                    <option value="">Laden...</option>
+                                </select>
+                            </div>
                         </div>
                         
                         <div class="gs1-form-group">
@@ -532,7 +778,7 @@
             
             $('#gs1-registration-data-form').html(html);
             
-            // Load measurement units dynamically
+            // Load measurement units
             this.loadMeasurementUnits();
             
             // Bind change events
@@ -685,7 +931,6 @@
             const start = button.data('start');
             const end = button.data('end');
             
-            // Get current last_used via table
             const currentText = button.closest('tr').find('td:eq(5)').text().trim();
             const current = currentText === 'Niet gebruikt' ? '-' : currentText;
             
@@ -705,7 +950,6 @@
             const start = parseInt(input.data('start'));
             const end = parseInt(input.data('end'));
             
-            // Validate
             if (!newValue) {
                 this.showError('Vul een GTIN in');
                 return;
@@ -786,47 +1030,47 @@
         },
         
         viewRegistrationDetails: function(invocationId) {
-        $('#gs1-registration-details-modal').show();
-        $('#gs1-registration-details-body').html('<p><span class="spinner is-active"></span> Details laden...</p>');
-        
-        $.ajax({
-            url: gs1GtinAdmin.ajaxUrl,
-            type: 'POST',
-            data: {
-                action: 'gs1_get_registration_details',
-                nonce: gs1GtinAdmin.nonce,
-                invocation_id: invocationId
-            },
-            success: (response) => {
-                if (response.success) {
-                    const data = response.data;
-                    let html = `<h3>Invocation ID: <code>${invocationId}</code></h3>`;
-                    
-                    if (data.successfulProducts && data.successfulProducts.length > 0) {
-                        html += `<h4 style="color: #00a32a;">✅ Succesvol (${data.successfulProducts.length})</h4>`;
-                        html += '<table class="wp-list-table widefat fixed striped"><thead><tr><th>GTIN</th><th>Beschrijving</th><th>Status</th></tr></thead><tbody>';
-                        data.successfulProducts.forEach(p => {
-                            html += `<tr><td><code>${p.gtin}</code></td><td>${p.description}</td><td>${p.status}</td></tr>`;
-                        });
-                        html += '</tbody></table>';
+            $('#gs1-registration-details-modal').show();
+            $('#gs1-registration-details-body').html('<p><span class="spinner is-active"></span> Details laden...</p>');
+            
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_get_registration_details',
+                    nonce: gs1GtinAdmin.nonce,
+                    invocation_id: invocationId
+                },
+                success: (response) => {
+                    if (response.success) {
+                        const data = response.data;
+                        let html = `<h3>Invocation ID: <code>${invocationId}</code></h3>`;
+                        
+                        if (data.successfulProducts && data.successfulProducts.length > 0) {
+                            html += `<h4 style="color: #00a32a;">✅ Succesvol (${data.successfulProducts.length})</h4>`;
+                            html += '<table class="wp-list-table widefat fixed striped"><thead><tr><th>GTIN</th><th>Beschrijving</th><th>Status</th></tr></thead><tbody>';
+                            data.successfulProducts.forEach(p => {
+                                html += `<tr><td><code>${p.gtin}</code></td><td>${p.description}</td><td>${p.status}</td></tr>`;
+                            });
+                            html += '</tbody></table>';
+                        }
+                        
+                        if (data.errorMessages && data.errorMessages.length > 0) {
+                            html += `<h4 style="color: #d63638; margin-top: 20px;">❌ Errors (${data.errorMessages.length})</h4>`;
+                            html += '<table class="wp-list-table widefat fixed striped"><thead><tr><th>Index</th><th>Error Code</th><th>Bericht</th></tr></thead><tbody>';
+                            data.errorMessages.forEach(e => {
+                                html += `<tr><td>${e.index}</td><td>${e.errorCode}</td><td>${e.errorMessageNl || e.errorMessageEn}</td></tr>`;
+                            });
+                            html += '</tbody></table>';
+                        }
+                        
+                        $('#gs1-registration-details-body').html(html);
+                    } else {
+                        $('#gs1-registration-details-body').html('<p style="color: #d63638;">Fout bij laden</p>');
                     }
-                    
-                    if (data.errorMessages && data.errorMessages.length > 0) {
-                        html += `<h4 style="color: #d63638; margin-top: 20px;">❌ Errors (${data.errorMessages.length})</h4>`;
-                        html += '<table class="wp-list-table widefat fixed striped"><thead><tr><th>Index</th><th>Error Code</th><th>Bericht</th></tr></thead><tbody>';
-                        data.errorMessages.forEach(e => {
-                            html += `<tr><td>${e.index}</td><td>${e.errorCode}</td><td>${e.errorMessageNl || e.errorMessageEn}</td></tr>`;
-                        });
-                        html += '</tbody></table>';
-                    }
-                    
-                    $('#gs1-registration-details-body').html(html);
-                } else {
-                    $('#gs1-registration-details-body').html('<p style="color: #d63638;">Fout bij laden</p>');
                 }
-            }
-        });
-    },
+            });
+        },
         
         // Logs
         viewLog: function(filename) {
@@ -1003,24 +1247,6 @@
                     }
                 }
             });
-        },
-        
-        // Helpers
-        showSuccess: function(message) {
-            this.showNotice(message, 'success');
-        },
-        
-        showError: function(message) {
-            this.showNotice(message, 'error');
-        },
-        
-        showNotice: function(message, type) {
-            const notice = $(`<div class="notice notice-${type} is-dismissible"><p>${message}</p></div>`);
-            $('.wrap > h1').after(notice);
-            
-            setTimeout(() => {
-                notice.fadeOut(() => notice.remove());
-            }, 5000);
         },
         
         // Database Management
@@ -1230,6 +1456,34 @@
                     this.showError('Netwerkfout');
                 }
             });
+        },
+        
+        // Helpers
+        showSuccess: function(message) {
+            this.showNotice(message, 'success');
+        },
+        
+        showWarning: function(message) {
+            this.showNotice(message, 'warning');
+        },
+        
+        showError: function(message) {
+            this.showNotice(message, 'error');
+        },
+        
+        showNotice: function(message, type) {
+            // Use alert for multiline messages
+            if (message.includes('\n')) {
+                alert(message);
+                return;
+            }
+            
+            const notice = $(`<div class="notice notice-${type} is-dismissible"><p>${message}</p></div>`);
+            $('.wrap > h1').after(notice);
+            
+            setTimeout(() => {
+                notice.fadeOut(() => notice.remove());
+            }, 5000);
         }
     };
     

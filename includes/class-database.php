@@ -1,11 +1,15 @@
 <?php
 /**
- * Database Class
+ * Database Class - FIXED: Prevent GTIN overwrites
  * 
  * Handles all database operations
  * 
  * @package GS1_GTIN_Manager
  * @author YoCo - Sebastiaan Kalkman
+ * 
+ * CHANGELOG:
+ * - FIXED: save_gtin_assignment() now preserves existing GTIN on updates
+ * - FIXED: Cannot overwrite GTIN once assigned (only status/metadata updates allowed)
  */
 
 if (!defined('ABSPATH')) {
@@ -277,7 +281,10 @@ class GS1_GTIN_Database {
     }
     
     /**
-     * Save GTIN assignment
+     * Save GTIN assignment - FIXED: Preserve existing GTIN on updates
+     * 
+     * CRITICAL FIX: Once a GTIN is assigned, it can NEVER be changed via this function.
+     * Only status, metadata, and registration info can be updated.
      */
     public static function save_gtin_assignment($data) {
         global $wpdb;
@@ -309,47 +316,81 @@ class GS1_GTIN_Database {
         $existing = self::get_gtin_assignment($data['product_id']);
         
         if ($existing) {
+            // ==========================================
+            // CRITICAL FIX: PRESERVE EXISTING GTIN!
+            // ==========================================
+            
+            // Remove GTIN and contract_number from update data
+            // These should NEVER change once assigned!
+            $existing_gtin = $existing->gtin;
+            $existing_contract = $existing->contract_number;
+            
+            unset($data['gtin']);
+            unset($data['contract_number']);
+            
+            // Log if someone tried to change the GTIN
+            if (isset($data['gtin']) && $data['gtin'] !== $existing_gtin) {
+                GS1_GTIN_Logger::log(
+                    "PREVENTED: Attempt to change GTIN for product {$data['product_id']} from {$existing_gtin} to {$data['gtin']}",
+                    'warning',
+                    [
+                        'product_id' => $data['product_id'],
+                        'old_gtin' => $existing_gtin,
+                        'attempted_new_gtin' => $data['gtin']
+                    ]
+                );
+            }
+            
+            // Update only allowed fields (status, metadata, registration info)
             $wpdb->update(
                 $table,
-                $data,
+                $data, // GTIN is not in this array anymore!
                 ['product_id' => $data['product_id']],
-                ['%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d'],
+                ['%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d'], // No %s for gtin!
                 ['%d']
             );
             
-            GS1_GTIN_Logger::log_gtin_assignment($data['product_id'], $data['gtin'], 'updated');
+            GS1_GTIN_Logger::log_gtin_assignment($data['product_id'], $existing_gtin, 'updated');
             
             return $existing->id;
+            
         } else {
-    // NIEUWE CODE: Check of GTIN al bestaat bij ander product
-    if (!empty($data['gtin'])) {
-        $gtin_exists = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM {$table} WHERE gtin = %s AND product_id != %d",
-            $data['gtin'],
-            $data['product_id']
-        ));
-        
-        if ($gtin_exists) {
-            GS1_GTIN_Logger::log(
-                "GTIN {$data['gtin']} already assigned to product {$gtin_exists->product_id}. Skipping.",
-                'error'
+            // NEW ASSIGNMENT
+            
+            // Check if GTIN already exists for another product
+            if (!empty($data['gtin'])) {
+                $gtin_exists = $wpdb->get_row($wpdb->prepare(
+                    "SELECT * FROM {$table} WHERE gtin = %s AND product_id != %d",
+                    $data['gtin'],
+                    $data['product_id']
+                ));
+                
+                if ($gtin_exists) {
+                    GS1_GTIN_Logger::log(
+                        "GTIN {$data['gtin']} already assigned to product {$gtin_exists->product_id}. Skipping.",
+                        'error',
+                        [
+                            'attempted_product_id' => $data['product_id'],
+                            'existing_product_id' => $gtin_exists->product_id,
+                            'gtin' => $data['gtin']
+                        ]
+                    );
+                    return false;
+                }
+            }
+            
+            // Insert new assignment
+            $wpdb->insert(
+                $table,
+                $data,
+                ['%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d']
             );
-            return false;
+            
+            GS1_GTIN_Logger::log_gtin_assignment($data['product_id'], $data['gtin'], 'created');
+            
+            return $wpdb->insert_id;
         }
     }
-    
-    $wpdb->insert(
-        $table,
-        $data,
-        ['%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d']
-    );
-    
-    GS1_GTIN_Logger::log_gtin_assignment($data['product_id'], $data['gtin'], 'created');
-    
-    return $wpdb->insert_id;
-}
-}
-            
     
     /**
      * Get GTIN ranges
@@ -562,7 +603,8 @@ class GS1_GTIN_Database {
         }
         return str_pad($gtin, 12, '0', STR_PAD_LEFT);
     }
-/**
+
+    /**
      * Insert default reference data
      */
     public static function insert_default_reference_data() {
