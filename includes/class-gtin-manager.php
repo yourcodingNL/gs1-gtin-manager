@@ -500,7 +500,7 @@ public static function update_gtin_at_gs1($product_id, $update_data = [], $force
             // Prepare data with FORCED CORRECT field values
             $data = [
                 'Gtin' => $assignment->gtin, // 12 digits (without checkdigit)
-                'Status' => 'Actief',
+                'Status' => 'Concept',
                 'Description' => substr($product->get_name(), 0, 300), // Max 300 chars
                 'BrandName' => $brand,
                 'Language' => 'Nederlands',
@@ -593,6 +593,15 @@ foreach ($product_ids as $product_id) {
                 
                 $product_data = $registration_data[$product_id];
                 
+                // CRITICAL FIX: Force GTIN to 13 digits with checkdigit
+                if (isset($product_data['Gtin']) && strlen($product_data['Gtin']) === 12) {
+                    $gtin12 = $product_data['Gtin'];
+                    $gtin13 = GS1_GTIN_Helpers::add_checkdigit($gtin12);
+                    $product_data['Gtin'] = $gtin13;
+                    
+                    GS1_GTIN_Logger::log("GTIN forced to 13 digits: {$gtin12} → {$gtin13}", 'info');
+                }
+                
                 // VALIDATE against Reference Data - REJECT invalid values
                 $validation_errors = [];
 
@@ -650,9 +659,10 @@ if (isset($product_data['TargetMarketCountry'])) {
 //     $product_data['ConsumerUnit'] = GS1_GTIN_Helpers::convert_boolean($product_data['ConsumerUnit']);
 // }
 
-if (isset($product_data['Status'])) {
-    $product_data['Status'] = GS1_GTIN_Helpers::convert_status($product_data['Status']);
-}
+// REMOVED: Status conversion forces "Concept" to "Actief" - keep original value!
+// if (isset($product_data['Status'])) {
+//     $product_data['Status'] = GS1_GTIN_Helpers::convert_status($product_data['Status']);
+// }
                 
                 // Ensure NetContent is integer
                 if (isset($product_data['NetContent'])) {
@@ -678,6 +688,15 @@ if (isset($product_data['MeasurementUnit'])) {
                 $product_data['Index'] = $index;
             }
             
+            // CRITICAL FIX: Force GTIN to 13 digits (also for auto-prepared data)
+            if (isset($product_data['Gtin']) && strlen($product_data['Gtin']) === 12) {
+                $gtin12 = $product_data['Gtin'];
+                $gtin13 = GS1_GTIN_Helpers::add_checkdigit($gtin12);
+                $product_data['Gtin'] = $gtin13;
+                
+                GS1_GTIN_Logger::log("GTIN forced to 13 digits (auto-prepared): {$gtin12} → {$gtin13}", 'info');
+            }
+            
             $products[] = $product_data;
             $index++;
         }
@@ -688,6 +707,20 @@ if (isset($product_data['MeasurementUnit'])) {
                 'error' => 'Geen producten om te registreren'
             ];
         }
+        
+        // CRITICAL VERIFICATION: All GTINs must be 13 digits
+        foreach ($products as $product) {
+            if (!isset($product['Gtin']) || strlen($product['Gtin']) !== 13) {
+                $gtin = $product['Gtin'] ?? 'MISSING';
+                GS1_GTIN_Logger::log("CRITICAL ERROR: GTIN is not 13 digits: {$gtin}", 'error');
+                return [
+                    'success' => false,
+                    'error' => "GTIN must be 13 digits, got: {$gtin}"
+                ];
+            }
+        }
+        
+        GS1_GTIN_Logger::log("All GTINs verified as 13 digits. Proceeding to GS1 API.", 'info');
         
         // Make API call
         $result = $api->register_gtin_products($products);

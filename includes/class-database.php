@@ -56,6 +56,20 @@ class GS1_GTIN_Database {
         
         dbDelta($sql_assignments);
         
+        // GTIN Exclusions table
+        $table_exclusions = $wpdb->prefix . 'gs1_gtin_exclusions';
+        $sql_exclusions = "CREATE TABLE {$table_exclusions} (
+            id bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+            gtin varchar(14) NOT NULL,
+            reason text DEFAULT NULL,
+            excluded_by bigint(20) UNSIGNED DEFAULT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
+            UNIQUE KEY gtin (gtin)
+        ) $charset_collate;";
+        
+        dbDelta($sql_exclusions);
+        
         // GTIN Ranges table
         $table_ranges = $wpdb->prefix . 'gs1_gtin_ranges';
         $sql_ranges = "CREATE TABLE {$table_ranges} (
@@ -505,6 +519,23 @@ class GS1_GTIN_Database {
             return false;
         }
         
+        // Check exclusion list
+        if (self::is_gtin_excluded($next_gtin)) {
+            GS1_GTIN_Logger::log("GTIN {$next_gtin} is excluded, trying next", 'info');
+            
+            // Update last_used and try next
+            $wpdb->update(
+                $ranges_table,
+                ['last_used' => $next_gtin],
+                ['id' => $range->id],
+                ['%s'],
+                ['%d']
+            );
+            
+            // Recursively try next GTIN
+            return self::get_next_available_gtin($contract_number);
+        }
+        
         // Check if already assigned
         $already_assigned = $wpdb->get_var($wpdb->prepare(
             "SELECT COUNT(*) FROM {$assignments_table} WHERE gtin = %s",
@@ -712,5 +743,68 @@ class GS1_GTIN_Database {
         $table = $wpdb->prefix . 'gs1_gtin_reference_data';
         
         return $wpdb->delete($table, ['id' => $id], ['%d']);
+    }
+    
+    /**
+     * Check if GTIN is excluded
+     */
+    public static function is_gtin_excluded($gtin) {
+        $gtin12 = self::normalize_gtin($gtin);
+        
+        global $wpdb;
+        $table = $wpdb->prefix . 'gs1_gtin_exclusions';
+        
+        $count = $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$table} WHERE gtin = %s",
+            $gtin12
+        ));
+        
+        return $count > 0;
+    }
+    
+    /**
+     * Add GTIN to exclusion list
+     */
+    public static function add_gtin_exclusion($gtin, $reason = '') {
+        $gtin12 = self::normalize_gtin($gtin);
+        
+        if (self::is_gtin_excluded($gtin12)) {
+            return false;
+        }
+        
+        global $wpdb;
+        $table = $wpdb->prefix . 'gs1_gtin_exclusions';
+        
+        $wpdb->insert($table, [
+            'gtin' => $gtin12,
+            'reason' => $reason,
+            'excluded_by' => get_current_user_id()
+        ]);
+        
+        GS1_GTIN_Logger::log("GTIN {$gtin12} added to exclusion list", 'info');
+        
+        return true;
+    }
+    
+    /**
+     * Remove GTIN from exclusion list
+     */
+    public static function remove_gtin_exclusion($gtin) {
+        $gtin12 = self::normalize_gtin($gtin);
+        
+        global $wpdb;
+        $table = $wpdb->prefix . 'gs1_gtin_exclusions';
+        
+        return $wpdb->delete($table, ['gtin' => $gtin12]);
+    }
+    
+    /**
+     * Get all excluded GTINs
+     */
+    public static function get_excluded_gtins() {
+        global $wpdb;
+        $table = $wpdb->prefix . 'gs1_gtin_exclusions';
+        
+        return $wpdb->get_results("SELECT * FROM {$table} ORDER BY created_at DESC");
     }
 }

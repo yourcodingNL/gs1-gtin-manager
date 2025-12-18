@@ -60,6 +60,7 @@
             // Overview tab
             $(document).on('click', '#gs1-apply-filters', () => this.applyFilters());
             $(document).on('click', '#gs1-reset-filters', () => this.resetFilters());
+            $(document).on('click', '#gs1-sync-ean', () => this.syncEanToSelected());
             $(document).on('click', '#gs1-select-all', (e) => this.selectAll(e));
             $(document).on('change', '.gs1-product-checkbox', () => this.updateSelection());
             $(document).on('click', '#gs1-assign-selected', () => this.assignGtins());
@@ -155,6 +156,11 @@
             $(document).on('click', '#gs1-cancel-reference-modal, #gs1-reference-modal .gs1-modal-close', () => {
                 $('#gs1-reference-modal').hide();
             });
+            
+            // Exclusions tab
+            $(document).on('click', '#gs1-add-exclusion', () => this.addExclusion());
+            $(document).on('click', '.gs1-remove-exclusion', (e) => this.removeExclusion(e));
+            $(document).on('click', '#gs1-bulk-import-exclusions', () => this.bulkImportExclusions());
         },
         
         // Load products
@@ -170,6 +176,7 @@
                     search: this.currentFilters.search || '',
                     brand: this.currentFilters.brand || '',
                     status: this.currentFilters.status || '',
+                    ean_filter: this.currentFilters.ean_filter || '',
                     page: this.currentPage
                 },
                 success: (response) => {
@@ -246,7 +253,8 @@
             this.currentFilters = {
                 search: $('#gs1-search-input').val(),
                 brand: $('#gs1-brand-filter').val(),
-                status: $('#gs1-status-filter').val()
+                status: $('#gs1-status-filter').val(),
+                ean_filter: $('#gs1-ean-filter').val()
             };
             this.currentPage = 1;
             this.loadProducts();
@@ -256,6 +264,7 @@
             $('#gs1-search-input').val('');
             $('#gs1-brand-filter').val('');
             $('#gs1-status-filter').val('');
+            $('#gs1-ean-filter').val('');
             this.currentFilters = {};
             this.currentPage = 1;
             this.loadProducts();
@@ -310,6 +319,9 @@
             
             // "Markeer als Extern" button: Always enabled if selection
             $('#gs1-mark-external').prop('disabled', !hasSelection);
+            
+            // "Pas EAN toe" button: Only enable if has GTIN
+            $('#gs1-sync-ean').prop('disabled', hasGtin === 0);
         },
         
         changePage: function(direction) {
@@ -1484,6 +1496,147 @@ if (isExternal) {
             setTimeout(() => {
                 notice.fadeOut(() => notice.remove());
             }, 5000);
+       },
+        
+        // Exclusions
+        addExclusion: function() {
+            const gtin = $('#gs1-exclusion-gtin').val().trim();
+            const reason = $('#gs1-exclusion-reason').val().trim();
+            
+            if (gtin.length !== 13 || !/^\d+$/.test(gtin)) {
+                this.showError('GTIN moet exact 13 cijfers zijn');
+                return;
+            }
+            
+            const button = $('#gs1-add-exclusion');
+            button.prop('disabled', true).text('Toevoegen...');
+            
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_add_exclusion',
+                    nonce: gs1GtinAdmin.nonce,
+                    gtin: gtin,
+                    reason: reason
+                },
+                success: (response) => {
+                    if (response.success) {
+                        this.showSuccess(response.data.message);
+                        location.reload();
+                    } else {
+                        this.showError(response.data.message);
+                    }
+                },
+                error: () => {
+                    this.showError('Netwerkfout');
+                },
+                complete: () => {
+                    button.prop('disabled', false).text('Toevoegen aan Exclusion List');
+                }
+            });
+        },
+        
+        removeExclusion: function(e) {
+            const gtin = $(e.target).data('gtin');
+            
+            if (!confirm(`GTIN ${gtin} verwijderen uit exclusion list?`)) {
+                return;
+            }
+            
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_remove_exclusion',
+                    nonce: gs1GtinAdmin.nonce,
+                    gtin: gtin
+                },
+                success: (response) => {
+                    if (response.success) {
+                        this.showSuccess(response.data.message);
+                        location.reload();
+                    } else {
+                        this.showError(response.data.message);
+                    }
+                },
+                error: () => {
+                    this.showError('Netwerkfout');
+                }
+            });
+        },
+        
+        bulkImportExclusions: function() {
+            const gtins = $('#gs1-bulk-exclusions').val().trim();
+            
+            if (!gtins) {
+                this.showError('Vul GTINs in');
+                return;
+            }
+            
+            const button = $('#gs1-bulk-import-exclusions');
+            button.prop('disabled', true).text('Importeren...');
+            
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_bulk_import_exclusions',
+                    nonce: gs1GtinAdmin.nonce,
+                    gtins: gtins
+                },
+                success: (response) => {
+                    if (response.success) {
+                        let msg = response.data.message;
+                        if (response.data.errors.length > 0) {
+                            msg += '\n\nErrors:\n' + response.data.errors.join('\n');
+                        }
+                        alert(msg);
+                        location.reload();
+                    } else {
+                        this.showError(response.data.message);
+                    }
+                },
+                error: () => {
+                    this.showError('Netwerkfout');
+                },
+                complete: () => {
+                    button.prop('disabled', false).text('Import GTINs');
+                }
+            });
+        },
+        
+        syncEanToSelected: function() {
+            if (this.selectedProducts.length === 0) return;
+            
+            if (!confirm(`EAN code bijwerken voor ${this.selectedProducts.length} producten?`)) return;
+            
+            const button = $('#gs1-sync-ean');
+            button.prop('disabled', true).text('Bijwerken...');
+            
+            $.ajax({
+                url: gs1GtinAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'gs1_sync_ean_to_products',
+                    nonce: gs1GtinAdmin.nonce,
+                    product_ids: this.selectedProducts
+                },
+                success: (response) => {
+                    if (response.success) {
+                        this.showSuccess(response.data.message);
+                        this.loadProducts();
+                    } else {
+                        this.showError(response.data.message);
+                    }
+                },
+                error: () => {
+                    this.showError('Netwerkfout');
+                },
+                complete: () => {
+                    button.prop('disabled', false).text('📝 Pas EAN toe aan geselecteerde');
+                }
+            });
         }
     };
     

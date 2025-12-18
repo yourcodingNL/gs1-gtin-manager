@@ -38,6 +38,10 @@ class GS1_GTIN_Admin {
         add_action('wp_ajax_gs1_delete_reference_data', [$this, 'ajax_delete_reference_data']);
         add_action('wp_ajax_gs1_set_default_reference', [$this, 'ajax_set_default_reference']);
         add_action('wp_ajax_gs1_get_measurement_units', [$this, 'ajax_get_measurement_units']);
+        add_action('wp_ajax_gs1_add_exclusion', [$this, 'ajax_add_exclusion']);
+        add_action('wp_ajax_gs1_remove_exclusion', [$this, 'ajax_remove_exclusion']);
+        add_action('wp_ajax_gs1_bulk_import_exclusions', [$this, 'ajax_bulk_import_exclusions']);
+        add_action('wp_ajax_gs1_sync_ean_to_products', [$this, 'ajax_sync_ean_to_products']);
     }
     
     public function add_menu_pages() {
@@ -120,6 +124,10 @@ class GS1_GTIN_Admin {
                    class="nav-tab <?php echo $tab === 'reference-data' ? 'nav-tab-active' : ''; ?>">
                     Reference Data
                 </a>
+                <a href="?post_type=product&page=gs1-gtin-manager&tab=exclusions" 
+                   class="nav-tab <?php echo $tab === 'exclusions' ? 'nav-tab-active' : ''; ?>">
+                    Exclusion List
+                </a>
             </nav>
             
             <div class="tab-content">
@@ -139,6 +147,9 @@ class GS1_GTIN_Admin {
                         break;
                     case 'reference-data':
                         $this->render_reference_data_tab();
+                        break;
+                    case 'exclusions':
+                        $this->render_exclusions_tab();
                         break;
                     case 'settings':
                         $settings = new GS1_GTIN_Settings();
@@ -171,6 +182,10 @@ class GS1_GTIN_Admin {
         include GS1_GTIN_PLUGIN_DIR . 'admin/views/reference-data.php';
     }
     
+    private function render_exclusions_tab() {
+        include GS1_GTIN_PLUGIN_DIR . 'admin/views/exclusions.php';
+    }
+    
     // AJAX handlers
     
     public function ajax_search_products() {
@@ -179,17 +194,26 @@ class GS1_GTIN_Admin {
         $search = isset($_POST['search']) ? sanitize_text_field($_POST['search']) : '';
         $brand = isset($_POST['brand']) ? sanitize_text_field($_POST['brand']) : '';
         $status_filter = isset($_POST['status']) ? sanitize_text_field($_POST['status']) : '';
+        $ean_filter = isset($_POST['ean_filter']) ? sanitize_text_field($_POST['ean_filter']) : '';
         $page = isset($_POST['page']) ? intval($_POST['page']) : 1;
         $per_page = 50;
         
-        // WooCommerce producten ophalen
+        // WooCommerce producten ophalen - Simple + Variations (geen variable parents)
         $args = [
-            'post_type' => 'product',
+            'post_type' => ['product', 'product_variation'],
             'post_status' => 'publish',
             'posts_per_page' => $per_page,
             'paged' => $page,
             'orderby' => 'date',
-            'order' => 'DESC'
+            'order' => 'DESC',
+            'tax_query' => [
+                [
+                    'taxonomy' => 'product_type',
+                    'field' => 'slug',
+                    'terms' => 'variable',
+                    'operator' => 'NOT IN'
+                ]
+            ]
         ];
         
         if (!empty($search)) {
@@ -206,6 +230,33 @@ class GS1_GTIN_Admin {
             $assignment = GS1_GTIN_Database::get_gtin_assignment($post->ID);
             
             $ean = get_post_meta($post->ID, 'ean_13', true);
+            
+            // EAN filter
+            if (!empty($ean_filter)) {
+                $gtin13 = $assignment ? GS1_GTIN_Helpers::add_checkdigit($assignment->gtin) : '';
+                
+                if ($ean_filter === 'mismatch') {
+                    // GTIN bestaat EN (EAN leeg OF GTIN ≠ EAN)
+                    if (!$assignment) {
+                        continue; // Geen GTIN = skip
+                    }
+                    if (empty($ean)) {
+                        // EAN leeg = mismatch (toon wel)
+                    } elseif ($gtin13 === $ean) {
+                        continue; // GTIN = EAN = skip
+                    }
+                } elseif ($ean_filter === 'synced') {
+                    // GTIN = EAN (exact match)
+                    if (!$assignment || !$ean || $gtin13 !== $ean) {
+                        continue;
+                    }
+                } elseif ($ean_filter === 'no_ean') {
+                    // Geen EAN
+                    if ($ean) {
+                        continue;
+                    }
+                }
+            }
             $brand_attr = $product->get_attribute('pa_brand');
             
             // Bepaal correcte status
@@ -845,6 +896,123 @@ public function ajax_check_database() {
         $units = GS1_GTIN_Database::get_reference_data('measurement', true);
         
         wp_send_json_success(['units' => $units]);
+    }
+    
+    public function ajax_add_exclusion() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        $gtin = sanitize_text_field($_POST['gtin'] ?? '');
+        $reason = sanitize_text_field($_POST['reason'] ?? '');
+        
+        if (strlen($gtin) !== 13 || !ctype_digit($gtin)) {
+            wp_send_json_error(['message' => 'GTIN moet 13 cijfers zijn']);
+        }
+        
+        if (!GS1_GTIN_Helpers::validate_checkdigit($gtin)) {
+            wp_send_json_error(['message' => 'Ongeldige checkdigit']);
+        }
+        
+        $result = GS1_GTIN_Database::add_gtin_exclusion($gtin, $reason);
+        
+        if ($result) {
+            wp_send_json_success(['message' => 'GTIN uitgesloten']);
+        } else {
+            wp_send_json_error(['message' => 'GTIN al uitgesloten']);
+        }
+    }
+    
+    public function ajax_remove_exclusion() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        $gtin = sanitize_text_field($_POST['gtin'] ?? '');
+        
+        if (empty($gtin)) {
+            wp_send_json_error(['message' => 'Geen GTIN opgegeven']);
+        }
+        
+        $result = GS1_GTIN_Database::remove_gtin_exclusion($gtin);
+        
+        if ($result) {
+            wp_send_json_success(['message' => 'GTIN verwijderd uit exclusion list']);
+        } else {
+            wp_send_json_error(['message' => 'Fout bij verwijderen']);
+        }
+    }
+    
+    public function ajax_bulk_import_exclusions() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        $gtins = isset($_POST['gtins']) ? $_POST['gtins'] : '';
+        $lines = array_filter(array_map('trim', explode("\n", $gtins)));
+        
+        $added = 0;
+        $skipped = 0;
+        $errors = [];
+        
+        foreach ($lines as $gtin) {
+            if (strlen($gtin) !== 13 || !ctype_digit($gtin)) {
+                $skipped++;
+                $errors[] = "{$gtin} - niet 13 cijfers";
+                continue;
+            }
+            
+            if (!GS1_GTIN_Helpers::validate_checkdigit($gtin)) {
+                $skipped++;
+                $errors[] = "{$gtin} - ongeldige checkdigit";
+                continue;
+            }
+            
+            if (GS1_GTIN_Database::add_gtin_exclusion($gtin, 'Bulk import')) {
+                $added++;
+            } else {
+                $skipped++;
+            }
+        }
+        
+        wp_send_json_success([
+            'message' => "{$added} GTINs toegevoegd, {$skipped} overgeslagen",
+            'added' => $added,
+            'skipped' => $skipped,
+            'errors' => $errors
+        ]);
+    }
+    
+    public function ajax_sync_ean_to_products() {
+        check_ajax_referer('gs1_gtin_nonce', 'nonce');
+        
+        $product_ids = isset($_POST['product_ids']) ? array_map('intval', $_POST['product_ids']) : [];
+        
+        if (empty($product_ids)) {
+            wp_send_json_error(['message' => 'Geen producten geselecteerd']);
+        }
+        
+        $synced = 0;
+        $skipped = 0;
+        
+        foreach ($product_ids as $product_id) {
+            $assignment = GS1_GTIN_Database::get_gtin_assignment($product_id);
+            
+            if (!$assignment) {
+                $skipped++;
+                continue;
+            }
+            
+            // GTIN met checkdigit
+            $gtin13 = GS1_GTIN_Helpers::add_checkdigit($assignment->gtin);
+            
+            // Update ean_13 meta
+            update_post_meta($product_id, 'ean_13', $gtin13);
+            
+            $synced++;
+            
+            GS1_GTIN_Logger::log("EAN synced for product {$product_id}: {$gtin13}", 'info');
+        }
+        
+        wp_send_json_success([
+            'synced' => $synced,
+            'skipped' => $skipped,
+            'message' => "{$synced} EAN codes bijgewerkt, {$skipped} overgeslagen"
+        ]);
     }
 }
 

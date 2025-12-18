@@ -87,6 +87,16 @@ $brands = get_terms([
             </div>
             
             <div class="gs1-filter-group">
+                <label>EAN Sync:</label>
+                <select id="gs1-ean-filter">
+                    <option value="">Alles</option>
+                    <option value="mismatch">GTIN ≠ EAN</option>
+                    <option value="synced">GTIN = EAN</option>
+                    <option value="no_ean">Geen EAN</option>
+                </select>
+            </div>
+            
+            <div class="gs1-filter-group">
                 <button type="button" id="gs1-apply-filters" class="button">Filter Toepassen</button>
                 <button type="button" id="gs1-reset-filters" class="button">Reset</button>
             </div>
@@ -109,6 +119,9 @@ $brands = get_terms([
         </button>
         <button type="button" id="gs1-mark-external" class="button" disabled>
             Markeer als Extern
+        </button>
+        <button type="button" id="gs1-sync-ean" class="button button-primary" disabled>
+            📝 Pas EAN toe aan geselecteerde
         </button>
     </div>
     
